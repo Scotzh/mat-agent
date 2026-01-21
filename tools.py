@@ -2,7 +2,7 @@ import os
 from mp_api.client import MPRester
 
 # 也可以从环境变量读取
-MP_API_KEY = os.getenv("MP_API_KEY", "XDRMEu9Sp0GtBKWEAgTgxFsFtd5YFILN")
+MP_API_KEY = os.getenv("MP_API_KEY")
 
 def search_materials_logic(elements=None, band_gap=None, formula=None, num_elements=None, **kwargs):
     """
