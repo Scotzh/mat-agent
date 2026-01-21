@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MatAgent - 材料科学专家</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    
+    <style>
+        /* --- 全局布局 --- */
+        body {
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #1e1e1e; /* 深色背景更显专业 */
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        /* 主容器：左右分栏的核心 */
+        .main-container {
+            width: 95vw;
+            height: 90vh;
+            display: flex;
+            gap: 15px;
+            max-width: 1400px;
+        }
+
+        /* --- 左侧：聊天区 (占 70%) --- */
+        .chat-section {
+            flex: 7;
+            background-color: #2d2d2d;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+            overflow: hidden;
+        }
+
+        .chat-header {
+            padding: 15px 20px;
+            background: #363636;
+            border-bottom: 1px solid #444;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .chat-window {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+
+        /* 消息气泡样式 */
+        .message {
+            margin-bottom: 20px;
+            padding: 12px 18px;
+            border-radius: 12px;
+            max-width: 85%;
+            line-height: 1.6;
+            position: relative;
+            word-wrap: break-word;
+        }
+
+        .user-message {
+            background-color: #007bff; /* 用户蓝 */
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+            border-bottom-right-radius: 2px;
+        }
+
+        .bot-message {
+            background-color: #3d3d3d; /* AI 深灰 */
+            color: #e0e0e0;
+            align-self: flex-start;
+            margin-right: auto;
+            border-bottom-left-radius: 2px;
+        }
+
+        /* Markdown 内容修正 */
+        .bot-message p { margin: 0 0 10px 0; }
+        .bot-message p:last-child { margin-bottom: 0; }
+        .bot-message ul { margin: 0 0 10px 20px; padding: 0; }
+        .bot-message pre { background: #1e1e1e !important; padding: 10px; border-radius: 6px; overflow-x: auto; }
+
+        /* 输入区域 */
+        .input-area {
+            padding: 20px;
+            background: #363636;
+            border-top: 1px solid #444;
+            display: flex;
+            gap: 10px;
+        }
+
+        #user-input {
+            flex: 1;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #555;
+            background: #252525;
+            color: white;
+            outline: none;
+            font-size: 16px;
+        }
+        
+        #user-input:focus { border-color: #007bff; }
+
+        #send-button {
+            padding: 0 25px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        #send-button:hover { background: #0056b3; }
+        #send-button:disabled { background: #555; cursor: not-allowed; }
+
+        /* --- 右侧：日志区 (占 30%) --- */
+        .log-section {
+            flex: 3;
+            background-color: #1a1a1a;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #333;
+            overflow: hidden;
+        }
+
+        .log-header {
+            padding: 15px;
+            background: #252525;
+            border-bottom: 1px solid #333;
+            font-family: monospace;
+            color: #aaa;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .log-container {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.85em;
+        }
+
+        /* 日志条目样式 */
+        .log-entry {
+            margin-bottom: 15px;
+            background: #252525;
+            border-radius: 6px;
+            border-left: 3px solid #28a745; /* 绿色边框表示正常调用 */
+            padding: 10px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .log-time { color: #666; font-size: 0.8em; margin-bottom: 5px; display: block; }
+        .log-func { color: #4ec9b0; font-weight: bold; margin-bottom: 5px; }
+        .log-args { color: #ce9178; word-break: break-all; white-space: pre-wrap; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: 0; } }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #2d2d2d; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #777; }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div class="chat-section">
+        <div class="chat-header">
+            🤖 MatAgent 聊天室
+        </div>
+        <div class="chat-window" id="chat-container">
+            <div class="message bot-message">
+                你好！我是材料科学专家 MatAgent。<br>
+                左侧聊天，右侧显示我的后台思考过程（工具调用日志）。请问有什么可以帮你？
+            </div>
+        </div>
+        <div class="input-area">
+            <input type="text" id="user-input" placeholder="例如：查找带隙在 1.0-2.0 eV 的 Fe-O 材料..." autocomplete="off">
+            <button id="send-button">发送</button>
+        </div>
+    </div>
+
+    <div class="log-section">
+        <div class="log-header">Backend Tool Logs</div>
+        <div class="log-container" id="log-container">
+            </div>
+    </div>
+</div>
+
+<script>
+    const chatContainer = document.getElementById('chat-container');
+    const logContainer = document.getElementById('log-container');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-button');
+
+    // 初始化 Markdown
+    marked.setOptions({
+        highlight: function(code, lang) {
+            const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+            return hljs.highlight(code, { language }).value;
+        },
+        breaks: true
+    });
+
+    // 辅助函数：添加聊天消息
+    function addMessage(text, isUser) {
+        const div = document.createElement('div');
+        div.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+        div.innerHTML = isUser ? text : marked.parse(text);
+        chatContainer.appendChild(div);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return div; // 返回 div 引用以便后续更新
+    }
+
+    // 辅助函数：添加右侧日志
+    function addLog(name, args) {
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        const time = new Date().toLocaleTimeString();
+        
+        // 尝试美化 JSON 显示
+        let prettyArgs = args;
+        try {
+            prettyArgs = JSON.stringify(JSON.parse(args), null, 2);
+        } catch(e) {}
+
+        div.innerHTML = `
+            <span class="log-time">[${time}] Tool Called</span>
+            <div class="log-func">Function: ${name}</div>
+            <div class="log-args">${prettyArgs}</div>
+        `;
+        logContainer.appendChild(div);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    // 核心发送逻辑
+    async function sendMessage() {
+        const message = userInput.value.trim();
+        if (!message) return;
+
+        addMessage(message, true);
+        userInput.value = '';
+        sendButton.disabled = true;
+
+        // 创建一个空的机器人消息框，准备接收流式文字
+        const botDiv = document.createElement('div');
+        botDiv.className = 'message bot-message';
+        chatContainer.appendChild(botDiv);
+        
+        let fullText = "";
+
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: message })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let partialLine = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = (partialLine + chunk).split('\n\n');
+                partialLine = lines.pop();
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+                    
+                    const jsonStr = trimmed.slice(6).trim();
+                    if (jsonStr === "[DONE]") break;
+
+                    try {
+                        const data = JSON.parse(jsonStr);
+
+                        // 1. 工具日志流向右侧
+                        if (data.type === 'tool') {
+                            addLog(data.name, data.args);
+                        } 
+                        
+                        // 2. 消息正文流向左侧
+                        else if (data.type === 'message' && data.content) {
+                            
+                            // --- 核心修复：拦截 DSML 标签及内部指令 ---
+                            // 增加对 < | / [ ] 等 DSML 特有字符组合的判断
+                            const dsmlPattern = /<\||DSML|invoke|parameter|function_calls/i;
+                            if (dsmlPattern.test(data.content)) {
+                                console.log("已拦截内部指令碎片:", data.content);
+                                continue; 
+                            }
+
+                            // 累加文本
+                            fullText += data.content;
+                            
+                            // 渲染 Markdown 并即时更新 DOM
+                            botDiv.innerHTML = marked.parse(fullText);
+                            
+                            // 只有当文本包含代码块时才调用高亮，节省性能
+                            if (fullText.includes('```')) {
+                                botDiv.querySelectorAll('pre code').forEach((block) => {
+                                    hljs.highlightElement(block);
+                                });
+                            }
+
+                            // 保持滚动条在最下方
+                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                        }
+
+                    } catch (e) {
+                        // 如果 Parse 失败，可能是因为 chunk 被截断了，这时 partialLine 机制会起作用
+                        console.error("解析单行 JSON 失败:", e, jsonStr);
+                    }
+                }
+            }
+
+        } catch (error) {
+            botDiv.innerHTML = `<span style="color:#ff6b6b">请求出错: ${error.message}</span>`;
+        } finally {
+            sendButton.disabled = false;
+            userInput.focus();
+        }
+    }
+
+    sendButton.addEventListener('click', sendMessage);
+    userInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+</script>
+
+</body>
+</html>
