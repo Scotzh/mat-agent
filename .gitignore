@@ -1,0 +1,10 @@
+.env
+.python-version
+others/
+mutiagent/
+custom_structures/
+cifs/
+calculation_output/
+vscode/
+__pycache__/
+matagent_project/
