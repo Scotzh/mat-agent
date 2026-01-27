@@ -1,0 +1,237 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>La12 S16 晶体结构可视化</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+        
+        .header .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+            margin-top: 10px;
+        }
+        
+        .shutdown-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background 0.3s;
+        }
+        
+        .shutdown-btn:hover {
+            background: #c0392b;
+        }
+        
+        .shutdown-btn:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+        }
+        
+        .content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 30px;
+        }
+        
+        .visualization-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            height: 600px;
+        }
+        
+        .info-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 600px;
+        }
+        
+        .iframe-container {
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 8px;
+            background: white;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>La12 S16</h1>
+            <div class="subtitle">
+                晶体结构可视化与详细信息
+            </div>
+            <button class="shutdown-btn" onclick="showShutdownConfirmation()">
+                🔴 结束进程
+            </button>
+        </div>
+        
+        <div class="content">
+            <div class="visualization-section">
+                <iframe src="cifs/images/La3S4-mp-567_3d.html" class="iframe-container" 
+                        title="3D Crystal Structure Visualization"></iframe>
+            </div>
+            
+            <div class="info-section">
+                <!-- 结构信息内容保持不变 -->
+                <h3>结构信息展示区域</h3>
+                <p>晶格参数、元素组成等信息将在这里显示...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确认关闭模态框 -->
+    <div id="shutdownModal" class="modal">
+        <div class="modal-content">
+            <h3>确认结束进程</h3>
+            <p>确定要结束当前服务进程吗？</p>
+            <div style="margin-top: 20px;">
+                <button onclick="shutdownServer()" style="
+                    padding: 10px 20px;
+                    background: #e74c3c;
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    margin-right: 10px;
+                ">确认结束</button>
+                <button onclick="hideShutdownConfirmation()" style="
+                    padding: 10px 20px;
+                    background: #95a5a6;
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                ">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showShutdownConfirmation() {
+            document.getElementById('shutdownModal').style.display = 'flex';
+        }
+        
+        function hideShutdownConfirmation() {
+            document.getElementById('shutdownModal').style.display = 'none';
+        }
+        
+        function shutdownServer() {
+            const btn = document.querySelector('.shutdown-btn');
+            btn.disabled = true;
+            btn.textContent = '正在结束...';
+            
+            fetch('/shutdown', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        document.body.innerHTML = `
+                            <div style="
+                                display: flex;
+                                justify-content: center;
+                                align-items: center;
+                                height: 100vh;
+                                flex-direction: column;
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                color: white;
+                                text-align: center;
+                            ">
+                                <h1>进程已结束</h1>
+                                <p>服务已安全关闭，您可以关闭浏览器窗口。</p>
+                                <p style="margin-top: 20px; font-size: 0.9em; opacity: 0.8;">
+                                    如果浏览器窗口没有自动关闭，请手动关闭。
+                                </p>
+                            </div>
+                        `;
+                        
+                        // 3秒后尝试关闭窗口
+                        setTimeout(() => {
+                            window.close();
+                        }, 3000);
+                    } else {
+                        alert('结束进程失败: ' + data.message);
+                        btn.disabled = false;
+                        btn.textContent = '🔴 结束进程';
+                    }
+                })
+                .catch(error => {
+                    alert('网络错误: ' + error);
+                    btn.disabled = false;
+                    btn.textContent = '🔴 结束进程';
+                });
+                
+            hideShutdownConfirmation();
+        }
+        
+        // 阻止浏览器关闭时的默认提示
+        window.addEventListener('beforeunload', function (e) {
+            // 可以添加一些清理逻辑
+        });
+    </script>
+</body>
+</html>
+    
