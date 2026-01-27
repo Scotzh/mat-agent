@@ -874,6 +874,75 @@ async def predict_band_gap(formula: str) -> dict:
 #         return {"error": str(e), "message": f"预测材料 {formula1} 和 {formula2} 混合后的离子电导率失败"}
 
 
+import json
+
+WORKFLOW_FILE = "material_workflow.json"
+
+
+def load_workflows():
+    try:
+        with open(WORKFLOW_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_workflows(data):
+    with open(WORKFLOW_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+@mcp.tool()
+async def set_task_progress(project_name: str, step_name: str, status: str) -> str:
+    """
+    用简单的字典记录项目进度。
+    Args:
+        project_name: 项目或材料名称 (如 "Li3InCl6_SolidState")
+        step_name: 步骤名称 (如 "VASP_Opt")
+        status: 状态 (如 "Pending", "Running", "Completed", "Failed")
+    """
+    db = load_workflows()
+    if project_name not in db:
+        db[project_name] = {}
+    
+    db[project_name][step_name] = {
+        "status": status,
+        "time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+    }
+    save_workflows(db)
+    return f"项目 {project_name} 的步骤 {step_name} 已更新为 {status}。"
+
+@mcp.tool()
+async def list_all_projects() -> list[str]:
+    """
+    列出当前所有材料研发项目的名称。
+    用于在开始工作前确认有哪些正在进行的项目。
+    """
+    db = load_workflows()
+    return list(db.keys())
+
+@mcp.tool()
+async def get_project_workflow(project_name: str) -> dict:
+    """
+    根据项目名称查看具体的任务清单和进度。
+    
+    Args:
+        project_name: 项目名称（如 "Li3InCl6_Optimization"）
+    """
+    db = load_workflows()
+    if project_name not in db:
+        return {"error": f"未找到名为 '{project_name}' 的项目", "current_projects": list(db.keys())}
+    
+    return {
+        "project": project_name,
+        "workflow": db[project_name]
+    }
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     try:
         # 启动MCP服务器
