@@ -891,24 +891,27 @@ def save_workflows(data):
         json.dump(data, f, indent=4)
 
 @mcp.tool()
-async def set_task_progress(project_name: str, step_name: str, status: str) -> str:
+async def set_task_progress(project_name: str, description: str = "", step_name: str = "", status: str = "") -> str:
     """
     用简单的字典记录项目进度。
     Args:
-        project_name: 项目或材料名称 (如 "Li3InCl6_SolidState")
+        project_name: 项目或材料名称 (如 "MoS2_Bandgap_Study")
+        description: 项目描述 (如 "本项目旨在研究MoS2的带隙,将进行晶体建模、结构优化和自洽计算，目前已进行到结构优化阶段，下一步是自洽计算")
         step_name: 步骤名称 (如 "VASP_Opt")
         status: 状态 (如 "Pending", "Running", "Completed", "Failed")
     """
     db = load_workflows()
     if project_name not in db:
         db[project_name] = {}
-    
-    db[project_name][step_name] = {
-        "status": status,
-        "time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-    }
+    if description:
+        db[project_name]["description"] = description
+    if step_name and status:
+        db[project_name][step_name] = {
+            "status": status,
+            "time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+        }
     save_workflows(db)
-    return f"项目 {project_name} 的步骤 {step_name} 已更新为 {status}。"
+    return f"项目 {project_name} 的步骤 {step_name} 已更新为 {status}。项目描述：{description}。"
 
 @mcp.tool()
 async def list_all_projects() -> list[str]:
