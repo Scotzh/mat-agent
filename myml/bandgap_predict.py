@@ -212,11 +212,11 @@ def predict_bandgap(formula:str | list[str]) -> list:
     model = xgboost.XGBRegressor()
     model.load_model('./myml/xgb_model.json')
     if isinstance(formula, str):
-            self.df = pd.DataFrame([{'formula': formula}])
+        df = pd.DataFrame([{'formula': formula}])
     elif isinstance(formula, list):
-        self.df = pd.DataFrame([{'formula': f} for f in formula])
+        df = pd.DataFrame([{'formula': f} for f in formula])
     df['normalized_formula'] = df['formula'].apply(normalize_formula)
     features = get_all_features(df)
     feature_vector = features[model.feature_names_in_]
     prediction = model.predict(feature_vector)
-    return predictions.tolist()
+    return prediction.tolist()
