@@ -205,14 +205,18 @@ def get_all_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def predict_bandgap(formula: str) -> float:
+def predict_bandgap(formula:str | list[str]) -> list:
     """
     使用预训练的模型预测给定化学式的带隙值
     """
     model = xgboost.XGBRegressor()
     model.load_model('./myml/xgb_model.json')
-    normalized_formula = normalize_formula(formula)
-    features = get_all_features(pd.DataFrame({'normalized_formula': [normalized_formula]}))
+    if isinstance(formula, str):
+            self.df = pd.DataFrame([{'formula': formula}])
+    elif isinstance(formula, list):
+        self.df = pd.DataFrame([{'formula': f} for f in formula])
+    df['normalized_formula'] = df['formula'].apply(normalize_formula)
+    features = get_all_features(df)
     feature_vector = features[model.feature_names_in_]
     prediction = model.predict(feature_vector)
-    return prediction[0]
+    return predictions.tolist()

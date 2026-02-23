@@ -809,13 +809,12 @@ async def extract_scf_info(task_directory: str) -> dict:
 
 # 机器学习模块
 @mcp.tool()
-async def predict_band_gap(formula: str) -> dict:
+async def predict_band_gap(formula:str | list[str]) -> dict:
     """
     使用预训练模型预测指定材料的带隙值
     
     Args:
-        formula: 化学式字符串 (如"SiO2")
-    
+        formula: 化学式字符串或列表 (如"SiO2"或["SiO2", "Fe2O3"])
     Returns:
         带隙预测结果
     """
@@ -829,49 +828,6 @@ async def predict_band_gap(formula: str) -> dict:
     except Exception as e:
         return {"error": str(e), "message": f"预测材料 {formula} 的带隙值失败"}
 
-# @mcp.tool()
-# async def predict_halid_ionic_conductivity(formula: str) -> dict:
-#     """
-#     使用预训练模型预测指定卤化物材料的离子电导率(25℃)，主要针对卤化物锂离子固态电解质材料
-    
-#     Args:
-#         formula: 化学式字符串 (如"Li3InCl6")
-    
-#     Returns:
-#         离子电导率预测结果
-#     """
-#     from myml import ion_conductivity as icp
-#     try:
-#         result = icp.predict_ionic_conductivity(formula)
-#         return {
-#             "formula": formula,
-#             "predicted_ionic_conductivity": result
-#         }
-#     except Exception as e:
-#         return {"error": str(e), "message": f"预测材料 {formula} 的离子电导率失败"}
-
-# @mcp.tool()
-# async def predict_mixed_halid_ionic_conductivity(formula1:str, formula2:str, ratios:list=[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]) -> dict:
-#     """
-#     使用预训练模型预测两种卤化物材料混合后的离子电导率(25℃)，主要针对卤化物固锂离子态电解质材料
-    
-#     Args:
-#         formula1: 第一种卤化物化学式字符串 (如"Li3InCl6")
-#         formula2: 第二种卤化物化学式字符串 (如"Li3YCl6")
-#         ratios: 混合比例列表，表示formula1的比例，默认[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
-#     Returns:
-#         混合离子电导率预测结果
-#     """
-#     from myml import ion_conductivity as micp
-#     try:
-#         result = micp.predict_mixed_ionic_conductivity(formula1, formula2, ratios)
-#         return {
-#             "formula1": formula1,
-#             "formula2": formula2,
-#             "predicted_mixed_ionic_conductivity": result
-#         }
-#     except Exception as e:
-#         return {"error": str(e), "message": f"预测材料 {formula1} 和 {formula2} 混合后的离子电导率失败"}
 
 
 import json

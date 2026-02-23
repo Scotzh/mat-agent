@@ -1,5 +1,6 @@
 .env
 .python-version
+material_workflow.json
 others/
 mutiagent/
 custom_structures/
