@@ -47,7 +47,7 @@ class VaspTaskInitializer:
         try:
             # 1. 远程创建主目录和子目录（无论本地如何）
             self.ssh.exec_command(f"mkdir -p '{task_dir}'")
-            subfolders = ["自洽计算", "结构优化", "态密度计算", "能带结构计算"]
+            subfolders = ["自洽计算", "结构优化", "态密度计算", "能带计算"]
             for folder in subfolders:
                 stdin, stdout, stderr = self.ssh.exec_command(f"mkdir -p '{os.path.join(task_dir, folder)}'")
                 stdout.channel.recv_exit_status()  # 等待每个命令完成
@@ -329,8 +329,79 @@ class VaspTaskInitializer:
                 "vasprun": calculation_vasprun
             }
         }
-            
 
+    def band_calc(self, task_dir):
+        """
+        进行能带结构计算
+        """
+        command = f"cd '{task_dir}' && ./../auto_band.sh"
+        stdin, stdout, stderr = self.ssh.exec_command(command)
+        output = stdout.read().decode()
+        error = stderr.read().decode()
+        print(output)
+        print(error)
+        return {"status": "结构优化任务已提交",
+                "command": command,
+                'stdout': str(output),
+                'stderr': str(error)}
+            
+    def extract_band_info(self, task_dir):
+        """
+        提取能带计算结果并下载数据文件
+        """
+        band_dir = os.path.join(task_dir, "能带计算")
+        
+        # 1. 远程调用 VASPKIT 211 导出格式化数据 (BAND.dat, KLINES.dat)
+        # 这样我们可以直接下载处理好的文件用于本地绘图
+        extract_cmd = f"cd '{band_dir}' && echo -e '21\\n211' | vaspkit"
+        self.ssh.exec_command(extract_cmd)
+
+        # 2. 准备本地目录
+        local_output = "./calculation_output/band"
+        os.makedirs(local_output, exist_ok=True)
+        file_prefix = os.path.basename(task_dir.rstrip('/'))
+
+        # 3. 定义需要下载的文件列表
+        files_to_download = {
+            "vasprun.xml": f"{file_prefix}_vasprun.xml",
+            "REFORMATTED_BAND.dat": f"{file_prefix}_BAND.dat",
+            "KLINES.dat": f"{file_prefix}_KLINES.dat",
+            "BAND_GAP": f"{file_prefix}_BAND_GAP",
+            "KPOINTS": f"{file_prefix}_KPOINTS",
+            "BAND.jpg": f"{file_prefix}_BAND.jpg",
+        }
+
+        downloaded_info = {}
+        for remote_name, local_name in files_to_download.items():
+            remote_f = os.path.join(band_dir, remote_name)
+            local_f = os.path.join(local_output, local_name)
+            try:
+                self.sftp.get(remote_f, local_f)
+                downloaded_info[remote_name] = local_f
+            except:
+                print(f"提醒: 未能下载 {remote_name}，可能计算未完成或出错。")
+
+        # 4. 解析基本带隙信息 (从下载的 vasprun.xml)
+        band_info = {}
+        if "vasprun.xml" in downloaded_info:
+            try:
+                v = vasp.Vasprun(downloaded_info["vasprun.xml"])
+                bs = v.get_band_structure(downloaded_info["KPOINTS"], line_mode=True)
+                # 获取带隙、VBM、CBM等
+                # band_info['band'] = v.eigenvalue_band_properties
+                band_info['is_metal'] = bs.is_metal()
+                band_info['gap'] = bs.get_band_gap()
+                if not bs.is_metal:
+                    band_info['vbm'] = bs.get_vbm()
+                    band_info['cbm'] = bs.get_cbm()
+            except Exception as e:
+                print(f"解析能带XML失败: {e}")
+
+        return {
+            "status": "提取完成",
+            "band_info": band_info,
+            "local_files": downloaded_info
+        }
 
 
 if __name__ == "__main__":

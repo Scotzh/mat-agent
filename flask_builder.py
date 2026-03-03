@@ -605,7 +605,7 @@ class CrystalStructureVisualizer:
         print("\n正在关闭服务...")
         sys.exit(0)
 
-    def run(self, port=5000, debug=False):
+    def run(self, port=6000, debug=False):
         """
         运行Flask应用
         

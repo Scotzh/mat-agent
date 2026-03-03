@@ -23,7 +23,9 @@ import loadenv
 import databasemanage
 import tryssh
 plt.style.use('seaborn-v0_8-whitegrid')
-mcp = FastMCP(name="MaterialDataServer")
+plt.rcParams["font.family"] = ["serif"]  # 指定默认字体为SimHei
+plt.rcParams['axes.unicode_minus'] = False   # 解决保存图像时负号'-'显示为方块的问题
+mcp = FastMCP(name="MatAgent")
 import tempfile
 import shutil
 import atexit
@@ -214,7 +216,7 @@ async def get_band_gap(material_id: str) -> dict:
 async def get_material_structure(material_id: str, 
                                 get_sites: bool = False,
                                 get_plot: bool = False, 
-                                download: bool = False) -> dict:
+                                download: bool = False)-> dict | list:
     """
     获取指定材料的晶体结构数据,并保存为CIF文件,生成晶体结构图
     
@@ -275,8 +277,16 @@ async def get_material_structure(material_id: str,
             # 生成晶体结构图
             if get_plot:
                 visualize_structure(structure)
-                message.append("3d晶体结构可视化交互式网页，请点击查看晶体结构图")
+                message.append("生成了2d结构预览图和3d可视化交互式网页，请点击查看晶体结构图")
                 message.append(f"3d_image_url: {IMAGE_URL}")
+                res = get_structure_plot(structure)
+                if not res["error"]:
+                    image = res["Image"]
+                    return image, {"structure_dict":structure_info, "message": message,
+                }
+                else:
+                    message.append(res["error"])
+                    return {"structure_dict":structure_info, "message": message}
 
         return {"structure_dict":structure_info, "message": message,
                 }
@@ -294,7 +304,7 @@ async def build_structure(a: float,
                           elements: list[str],
                           frac_coord: list[list[float]],
                           add_to_database: bool = False,
-                          database: str = 'custom_structures.db') -> dict:
+                          database: str = 'custom_structures.db') -> dict | list:
     """
     构建晶体结构并保存为CIF文件,生成晶体结构图
     
@@ -320,13 +330,23 @@ async def build_structure(a: float,
         message = [f"自定义晶体结构已保存为 custom_structures/{formula}_custom.cif"]
         visualize_structure(structure)
         message.append("3d晶体结构可视化交互式网页，请点击查看晶体结构图")
+
         if add_to_database:
             db = databasemanage.DatabaseManager(database)
             db.add_material(formula=formula, structure=structure, band_gap=None, material_id=None)
             db.close()
             message.append(f"自定义晶体结构已添加到数据库 {database}")
 
-        return {"cif_file_path": f"custom_structures/{formula}_custom.cif",
+        res = get_structure_plot(structure)
+        if not res["error"]:
+            image = res["Image"]
+            return image, {"cif_file_path": f"custom_structures/{formula}_custom.cif",
+                "3d_image_url": IMAGE_URL,
+                "message": message
+                }
+        else:
+            message.append(res["error"])
+            return {"cif_file_path": f"custom_structures/{formula}_custom.cif",
                 "3d_image_url": IMAGE_URL,
                 "message": message
                 }
@@ -381,6 +401,135 @@ def visualize_structure(structure: Structure) -> None:
     p = multiprocessing.Process(target=htmlviewer.run)
     p.start()
     child_processes.append((p, temp_dir))
+
+import matplotlib.pyplot as plt
+import io
+from fastmcp.utilities.types import Image
+from ase.build import bulk
+from ase.visualize.plot import plot_atoms
+from ase import Atoms
+from itertools import product
+import numpy as np
+def get_structure_plot(structure: Structure,
+                          repeat: bool = True, rotation: str ='10x,10y,0z') -> dict:
+    """
+    输入指定的晶体结构并返回预览图。
+    参数:
+    - struture: Pymatgen.Structure对象
+    - repeat: 为了让图片看起来更像“晶格”，可以重复一下晶胞 (可选)
+    - rotation: 观测角度默认为 '10x,10y,0z'
+    """
+    try:
+        # 转换为 ASE Atoms 对象
+        atoms = structure.to_ase_atoms()
+        atoms.wrap()
+        # if repeat:
+        #     atoms = atoms.repeat((2, 2, 2))  # 2x2x2 supercell
+        def _enhance_for_plot(atoms: Atoms, tolerance: float = 0.05) -> Atoms:
+            """
+            专门为可视化增强 Atoms：将边界原子复制到相对的边界、棱和顶点。
+            """
+            # 1. 获取原始信息
+            cell = atoms.get_cell()
+            scaled_positions = atoms.get_scaled_positions()
+            symbols = atoms.get_chemical_symbols()
+            
+            new_scaled = []
+            new_symbols = []
+            
+            # 2. 定义平移矢量 (0, 1) 的所有组合 (共8个方向，足以覆盖 1x1x1 晶格的所有边界)
+            # 如果原原子在 0 附近，偏移 +1 就能补全对侧
+            offsets = list(product([0, 1], repeat=3))
+            
+            for pos, symbol in zip(scaled_positions, symbols):
+                # 检查该原子靠近哪些边界
+                # near_zero[i] 为 True 表示该原子在第 i 维靠近 0
+                near_zero = np.isclose(pos, 0, atol=tolerance)
+                
+                for off in offsets:
+                    # 如果偏移量 off 在某个维度为 1，但原子在该维度并不靠近 0，则跳过
+                    if any(o == 1 and not nz for o, nz in zip(off, near_zero)):
+                        continue
+                        
+                    # 基础位置 (off 为 (0,0,0)) 已经在循环中包含
+                    new_scaled.append(pos + off)
+                    new_symbols.append(symbol)
+                    
+            # 3. 构建新对象
+            # 保持原始 cell 不变，这样绘图软件能正确渲染晶格线
+            enhanced = Atoms(symbols=new_symbols, 
+                            scaled_positions=new_scaled, 
+                            cell=cell, 
+                            pbc=True) # 绘图时开启 PBC 通常效果更好
+            return enhanced
+
+        enhanced_atoms = _enhance_for_plot(atoms=atoms)
+        # 使用 ASE 绘图
+        fig, ax = plt.subplots(figsize=(16,16))
+        
+        # 使用 ASE 的 plot_atoms 函数
+        plot_atoms(
+            enhanced_atoms,
+            ax,
+            rotation=rotation,
+            show_unit_cell=2,
+        )
+        
+        # 分析对称性
+        analyzer = SpacegroupAnalyzer(structure)
+        spacegroup = analyzer.get_space_group_symbol()
+        
+        # 添加结构信息
+        a, b, c = structure.lattice.a, structure.lattice.b, structure.lattice.c
+        alpha, beta, gamma = structure.lattice.alpha, structure.lattice.beta, structure.lattice.gamma
+        formula = structure.composition.formula
+        
+        info_text = (
+            f"Formula: {formula}\n"
+            f"Space group: {spacegroup}\n"
+            f"Lattice parameters: a={a:.3f} Å, b={b:.3f} Å, c={c:.3f} Å\n"
+            f"Angles: α={alpha:.2f}°, β={beta:.2f}°, γ={gamma:.2f}°\n"
+            f"Atoms in unit cell: {len(structure)}\n"
+            f"Total atoms shown: {len(atoms)}"
+        )
+        
+        ax.text(0.02, 0.98, info_text,
+                transform=ax.transAxes,
+                fontsize=11,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        
+        ax.set_axis_off()
+        ax.set_title(f"Crystal Structure Visualization of {structure.composition.reduced_formula}", 
+                    fontsize=14, fontweight='bold')
+        
+        # 保存到内存
+        img_buffer = io.BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=200, bbox_inches='tight')
+        plt.close(fig)
+        
+        return {"Image": Image(data=img_buffer.getvalue(), format="png"), "error": None}
+        
+    except Exception as e:
+        # 如果输入的参数不合法（如元素符号错误），返回一个简单的报错图或抛出异常
+        return {"Image": _create_error_image(f"构建失败: {str(e)}"), "error": e} 
+
+def _create_error_image(error_message: str) -> Image:
+    """创建错误信息图片"""
+    fig, ax = plt.subplots(figsize=(8, 2))
+    ax.text(0.5, 0.5, f"❌ {error_message}",
+            ha='center', va='center', fontsize=12, color='red')
+    ax.set_axis_off()
+    
+    img_buffer = io.BytesIO()
+    plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return Image(data=img_buffer.getvalue(), format="png")
+
+
+
+
+
 
 @mcp.tool()
 async def get_material_all_infomation_by_id(material_id: str) -> dict:
@@ -732,11 +881,12 @@ async def submit_opt_mission(task_directory: str) -> dict:
         return {"error": str(e), "message": "任务提交失败"}
 
 @mcp.tool()
-async def extract_opt_info(task_directory: str, visualize: bool = True) -> dict:
+async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize: bool = False) -> dict:
     """
     提取结构优化任务的结果信息
     Args:
         task_directory: 任务目录路径
+        get_plot: 是否生成结构预览图
         visualize: 是否生成3D可视化结构图
     Returns:
         结构优化结果信息
@@ -751,8 +901,14 @@ async def extract_opt_info(task_directory: str, visualize: bool = True) -> dict:
             if visualize:
                 visualize_structure(result['structure'])
                 result["3d_image_url"] = IMAGE_URL
-            result.pop("structure")  # 删除structure对象，避免序列化问题
-            return result
+            if get_plot:
+                res = get_structure_plot(result['structure'])
+                image = res["Image"]
+                result["error"] = res['error']
+                result.pop("structure")  
+                return image, result
+            result.pop("structure")  
+            return image, result
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
 
@@ -802,6 +958,123 @@ async def extract_scf_info(task_directory: str) -> dict:
     try:
         with connection as vasp_task:
             result = vasp_task.extract_scf_info(task_directory)
+            return result
+    except Exception as e:
+        return {"error": str(e), "message": "提取任务结果失败"}
+
+
+@mcp.tool()
+async def submit_band_mission(task_directory: str) -> dict:
+    """
+    提交能带计算任务到远程服务器
+    
+    Args:
+        task_directory: 任务目录路径
+    Returns:
+        任务提交结果
+    """
+    try:
+        with connection as vasp_task:
+            result = None
+            for _ in range(3):
+                result = vasp_task.band_calc(task_directory)
+                if result:
+                    break
+            return result
+    except Exception as e:
+        return {"error": str(e), "message": "任务提交失败"}
+
+
+def plot_vasp_band(xml_path, kpoints_path):
+    """
+    使用 Pymatgen 绘制高质量能带图
+    """
+    from pymatgen.io.vasp import Vasprun
+    from pymatgen.electronic_structure.plotter import BSPlotter
+
+    try:
+        # 1. 加载数据 (指定 KPOINTS 以获得正确的标签)
+        run = Vasprun(xml_path, parse_projected_eigen=False)
+        # 注意：对于金属，get_band_structure 依然有效
+        bs = run.get_band_structure(kpoints_filename=kpoints_path, line_mode=True)
+
+        # 6. 提取详细物理量 (处理金属态空值问题)
+        is_metal = bs.is_metal()
+        gap_info = bs.get_band_gap()
+        
+        # 如果是金属，VBM/CBM 通常定义在费米面交叉处
+        # 这里做一个简单的安全提取
+        results = {
+            "is_metal": is_metal,
+            "gap": gap_info['energy'],
+            "fermi_energy": bs.efermi,
+        }
+
+        # 2. 初始化绘制器
+        plotter = BSPlotter(bs)
+        
+        # 3. 获取画布
+        # get_plot() 实际上返回的是 matplotlib.pyplot 模块
+        plt_module = plotter.get_plot()
+        fig = plt.gcf() 
+        ax = plt.gca()
+        
+
+        # --- 标签深度美化 ---
+        # 获取当前刻度位置和原始文本
+        xticks = ax.get_xticks()
+        labels = [label.get_text() for label in ax.get_xticklabels()]
+        
+        # 替换 GAMMA 为标准大写希腊字母 \Gamma
+        # 如果你确定想要小写，请把 \Gamma 改为 \gamma
+        fixed_labels = [l.replace('GAMMA', r'$\Gamma$') for l in labels]
+        
+        # 重新设置刻度，确保对齐
+        ax.set_xticks(xticks)
+        ax.set_xticklabels(fixed_labels, fontsize=20)
+        
+        # 美化 Y 轴标签
+        ax.set_ylabel(r'$E - E_f$ (eV)', fontsize=20)
+        ax.set_title('Band Structure', fontsize=22, pad=20)
+
+        # 画一条更醒目的费米面红线
+        ax.axhline(y=0, color='#d62728', linestyle='--', linewidth=2, zorder=1)
+
+        # 导出
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+            
+        
+        return {"Image": Image(data=buf.getvalue()), "data": results, "error": None}
+
+    except Exception as e:
+        return {"Image": None, "error": str(e)}
+
+
+@mcp.tool()
+async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict:
+    """
+    提取能带计算任务的结果信息
+    Args:
+        task_directory: 任务目录路径
+        plot_band: 是否绘制能带图
+    Returns:
+        能带计算结果信息
+    """
+    try:
+        with connection as vasp_task:
+            result = vasp_task.extract_band_info(task_directory)
+            if plot_band:
+                res = plot_vasp_band(xml_path= result['local_files']['vasprun.xml'],kpoints_path= result['local_files']['KPOINTS'])
+                if not res["error"]:
+                    image = res["Image"]
+                    res.pop("Image")
+                    result.update({"plot_info": res, "message": "绘图成功"})
+                    return image, result
+                else:
+                    res.pop("Image")
+                    result.update({"plot_info": res, "message": "绘图失败"})
             return result
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
@@ -917,6 +1190,7 @@ if __name__ == "__main__":
                 if i == 4:
                     raise e
         mcp.run(
+            # transport="streamable-http",
             transport="sse",
             host="127.0.0.1",
             port=8000
