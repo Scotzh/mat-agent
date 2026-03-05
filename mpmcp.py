@@ -6,9 +6,6 @@ from mp_api.client import MPRester
 from pydantic import BaseModel
 from pymatgen.core import Structure
 from pymatgen.io.cif import CifWriter
-# import pymatgen.electronic_structure
-# from pymatgen.electronic_structure.plotter import DosPlotter
-# from pymatgen.electronic_structure.dos import CompleteDos
 import matplotlib.pyplot as plt
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core import Lattice
@@ -17,6 +14,7 @@ from ase.io import write
 from ase.visualize import view
 import multiprocessing
 import flask_builder
+import flask_plot
 import duckdb
 import pickle
 import loadenv
@@ -282,7 +280,7 @@ async def get_material_structure(material_id: str,
                 res = get_structure_plot(structure)
                 if not res["error"]:
                     image = res["Image"]
-                    return image, {"structure_dict":structure_info, "message": message,
+                    return {"image_url": image, "structure_dict":structure_info, "message": message,
                 }
                 else:
                     message.append(res["error"])
@@ -303,6 +301,7 @@ async def build_structure(a: float,
                           gamma: float,
                           elements: list[str],
                           frac_coord: list[list[float]],
+                          scaling_matrix: int | list = 1,
                           add_to_database: bool = False,
                           database: str = 'custom_structures.db') -> dict | list:
     """
@@ -317,12 +316,15 @@ async def build_structure(a: float,
         gamma: 晶格参数gamma
         elements: 元素符号列表，有多少个原子就要写多少个 (如["Si","O", "O"])
         frac_coord: 分数坐标列表，与上面的原子一一对应(如[[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.5]])
+        scaling_matrix: 超胞，默认整数（int）：表示在 a, b, c 三个方向进行相同的扩胞。例如 scaling_matrix=2表示构建 2×2×2 的超胞。
+                    列表（list）：长度为 3 的列表，分别表示 a, b, c 方向的扩胞倍数。例如 scaling_matrix=[2, 1, 1]表示构建 2×1×1 的超胞。
         add_to_database: 是否将结构添加到数据库,默认False
         database: 数据库文件名,默认'custom_structures.db'
     """
     try:
         lattice = Lattice.from_parameters(a, b, c, alpha, beta, gamma)
         structure = Structure(lattice, elements, frac_coord)
+        structure = structure.make_supercell(scaling_matrix = scaling_matrix)
         formula = structure.composition.reduced_formula
         os.makedirs("custom_structures", exist_ok=True)
         os.makedirs("custom_structures/images", exist_ok=True)
@@ -340,7 +342,7 @@ async def build_structure(a: float,
         res = get_structure_plot(structure)
         if not res["error"]:
             image = res["Image"]
-            return image, {"cif_file_path": f"custom_structures/{formula}_custom.cif",
+            return {"image_url": image, "cif_file_path": f"custom_structures/{formula}_custom.cif",
                 "3d_image_url": IMAGE_URL,
                 "message": message
                 }
@@ -508,13 +510,13 @@ def get_structure_plot(structure: Structure,
         plt.savefig(img_buffer, format='png', dpi=200, bbox_inches='tight')
         plt.close(fig)
         
-        return {"Image": Image(data=img_buffer.getvalue(), format="png"), "error": None}
+        return {"Image": get_plot_url(img_buffer), "error": None}
         
     except Exception as e:
         # 如果输入的参数不合法（如元素符号错误），返回一个简单的报错图或抛出异常
-        return {"Image": _create_error_image(f"构建失败: {str(e)}"), "error": e} 
+        return {"Image": get_plot_url(_create_error_image(f"构建失败: {str(e)}")), "error": e} 
 
-def _create_error_image(error_message: str) -> Image:
+def _create_error_image(error_message: str):
     """创建错误信息图片"""
     fig, ax = plt.subplots(figsize=(8, 2))
     ax.text(0.5, 0.5, f"❌ {error_message}",
@@ -524,10 +526,11 @@ def _create_error_image(error_message: str) -> Image:
     img_buffer = io.BytesIO()
     plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
     plt.close(fig)
-    return Image(data=img_buffer.getvalue(), format="png")
+    return img_buffer
 
 
-
+def get_plot_url(img_buffer):
+    return server.add_image(img_buffer)
 
 
 
@@ -906,9 +909,9 @@ async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize
                 image = res["Image"]
                 result["error"] = res['error']
                 result.pop("structure")  
-                return image, result
+                result["image_url"] = image
             result.pop("structure")  
-            return image, result
+            return result
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
 
@@ -1046,7 +1049,7 @@ def plot_vasp_band(xml_path, kpoints_path):
         plt.close(fig)
             
         
-        return {"Image": Image(data=buf.getvalue()), "data": results, "error": None}
+        return {"Image": get_plot_url(buf), "data": results, "error": None}
 
     except Exception as e:
         return {"Image": None, "error": str(e)}
@@ -1070,8 +1073,8 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
                 if not res["error"]:
                     image = res["Image"]
                     res.pop("Image")
-                    result.update({"plot_info": res, "message": "绘图成功"})
-                    return image, result
+                    result.update({"image_url": image, "plot_info": res, "message": "绘图成功"})
+                    returnresult
                 else:
                     res.pop("Image")
                     result.update({"plot_info": res, "message": "绘图失败"})
@@ -1189,6 +1192,8 @@ if __name__ == "__main__":
                 print(f"连接远程服务器失败，正在重试... ({i+1}/5)")
                 if i == 4:
                     raise e
+        server = flask_plot.MemoryImageServer(port=6760)
+        server.start()
         mcp.run(
             # transport="streamable-http",
             transport="sse",
