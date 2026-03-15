@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastmcp import FastMCP
 import asyncio
 import os
@@ -274,9 +276,9 @@ async def get_material_structure(material_id: str,
                 message.append(f"材料 {material_id} 的晶体结构已保存为cif文件，路径为'cifs/{reduced_formula}-{material_id}.cif'")   
             # 生成晶体结构图
             if get_plot:
-                visualize_structure(structure)
+                structure_url = visualize_structure(structure)
                 message.append("生成了2d结构预览图和3d可视化交互式网页，请点击查看晶体结构图")
-                message.append(f"3d_image_url: {IMAGE_URL}")
+                message.append(f"3d_image_url: {structure_url}")
                 res = get_structure_plot(structure)
                 if not res["error"]:
                     image = res["Image"]
@@ -302,8 +304,8 @@ async def build_structure(a: float,
                           elements: list[str],
                           frac_coord: list[list[float]],
                           scaling_matrix: int | list = 1,
-                          add_to_database: bool = False,
-                          database: str = 'custom_structures.db') -> dict | list:
+                          save_to_cif: bool = False,
+                          add_to_database: str = None,) -> dict | list:
     """
     构建晶体结构并保存为CIF文件,生成晶体结构图
     
@@ -318,8 +320,8 @@ async def build_structure(a: float,
         frac_coord: 分数坐标列表，与上面的原子一一对应(如[[0.0, 0.0, 0.0], [0.25, 0.25, 0.25], [0.5, 0.5, 0.5]])
         scaling_matrix: 超胞，默认整数（int）：表示在 a, b, c 三个方向进行相同的扩胞。例如 scaling_matrix=2表示构建 2×2×2 的超胞。
                     列表（list）：长度为 3 的列表，分别表示 a, b, c 方向的扩胞倍数。例如 scaling_matrix=[2, 1, 1]表示构建 2×1×1 的超胞。
-        add_to_database: 是否将结构添加到数据库,默认False
-        database: 数据库文件名,默认'custom_structures.db'
+        save_to_cif: 是否保存cif，默认不保存，需要时开启
+        add_to_database: 是否将结构添加到数据库,默认None
     """
     try:
         lattice = Lattice.from_parameters(a, b, c, alpha, beta, gamma)
@@ -328,28 +330,31 @@ async def build_structure(a: float,
         formula = structure.composition.reduced_formula
         os.makedirs("custom_structures", exist_ok=True)
         os.makedirs("custom_structures/images", exist_ok=True)
-        CifWriter(structure).write_file(f"custom_structures/{formula}_custom.cif")
-        message = [f"自定义晶体结构已保存为 custom_structures/{formula}_custom.cif"]
-        visualize_structure(structure)
+        message = []
+        current_date = datetime.now().strftime("%Y%m%d%H%M")
+        if save_to_cif:
+            CifWriter(structure).write_file(f"custom_structures/{formula}_custom_{current_date}.cif")
+            message.append(f"自定义晶体结构已保存为 ./custom_structures/{formula}_custom_{current_date}.cif")
+        structure_url =  visualize_structure(structure)
         message.append("3d晶体结构可视化交互式网页，请点击查看晶体结构图")
 
         if add_to_database:
-            db = databasemanage.DatabaseManager(database)
+            db = databasemanage.DatabaseManager(add_to_database)
             db.add_material(formula=formula, structure=structure, band_gap=None, material_id=None)
             db.close()
-            message.append(f"自定义晶体结构已添加到数据库 {database}")
+            message.append(f"自定义晶体结构已添加到数据库 {add_to_database}")
 
         res = get_structure_plot(structure)
         if not res["error"]:
             image = res["Image"]
-            return {"image_url": image, "cif_file_path": f"custom_structures/{formula}_custom.cif",
-                "3d_image_url": IMAGE_URL,
+            return {
+                "3d_image_url": structure_url,
                 "message": message
                 }
         else:
             message.append(res["error"])
-            return {"cif_file_path": f"custom_structures/{formula}_custom.cif",
-                "3d_image_url": IMAGE_URL,
+            return {
+                "3d_image_url": structure_url,
                 "message": message
                 }
 
@@ -357,7 +362,7 @@ async def build_structure(a: float,
         return {"error": str(e), "message": "构建晶体结构失败"}
 
 
-def visualize_structure(structure: Structure) -> None:
+def visualize_structure(structure: Structure) -> str:
     """
     可视化晶体结构的3D交互式网页（使用临时文件，进程结束后自动删除）
     Args:
@@ -371,38 +376,9 @@ def visualize_structure(structure: Structure) -> None:
     html_path = os.path.join(temp_dir, f"{formula}_custom_3d.html")
     write(html_path, atoms, format='html')
 
-    htmlviewer = flask_builder.CrystalStructureVisualizer(structure, html_path)
+    url = crystalmanager.show(structure, html_path)
+    return url
 
-    # 先检查有没有正在运行的子程序，如果有，先停止并删除其临时目录
-    if child_processes:
-        for p, tdir in list(child_processes):
-            try:
-                if p.is_alive():
-                    p.terminate()
-                    p.join(3)
-                    if p.is_alive():
-                        try:
-                            p.kill()
-                        except Exception:
-                            pass
-                        p.join(1)
-            except Exception:
-                pass
-            # 删除该子进程对应的临时目录
-            try:
-                if tdir and os.path.exists(tdir):
-                    shutil.rmtree(tdir, ignore_errors=True)
-            except Exception:
-                pass
-            try:
-                child_processes.remove((p, tdir))
-            except ValueError:
-                pass
-
-    # 启动新进程并记录 (process, temp_dir)
-    p = multiprocessing.Process(target=htmlviewer.run)
-    p.start()
-    child_processes.append((p, temp_dir))
 
 import matplotlib.pyplot as plt
 import io
@@ -902,13 +878,12 @@ async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize
                 if result:
                     break
             if visualize:
-                visualize_structure(result['structure'])
-                result["3d_image_url"] = IMAGE_URL
+                structure_url = visualize_structure(result['structure'])
+                result["3d_image_url"] = structure_url
             if get_plot:
                 res = get_structure_plot(result['structure'])
                 image = res["Image"]
                 result["error"] = res['error']
-                result.pop("structure")  
                 result["image_url"] = image
             result.pop("structure")  
             return result
@@ -1074,15 +1049,31 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
                     image = res["Image"]
                     res.pop("Image")
                     result.update({"image_url": image, "plot_info": res, "message": "绘图成功"})
-                    returnresult
                 else:
                     res.pop("Image")
                     result.update({"plot_info": res, "message": "绘图失败"})
             return result
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
+    
 
-
+@mcp.tool()
+async def excute_command(command: str) -> dict:
+    """
+    在计算服务器上执行linux命令（注意计算服务器和mcp服务器不是同一个服务器）
+    若要执行python
+    Args:
+        command: 命令（严禁使用危险命令）
+    Returns:
+        执行的结果
+    """
+    try:
+        with connection as vasp_task:
+            result = vasp_task.excute_command(command)
+            return result
+    except Exception as e:
+        return {"error": str(e), "message": "命令提交或执行失败"}
+    
 # 机器学习模块
 @mcp.tool()
 async def predict_band_gap(formula:str | list[str]) -> dict:
@@ -1171,6 +1162,47 @@ async def get_project_workflow(project_name: str) -> dict:
         "workflow": db[project_name]
     }
 
+@mcp.tool()
+async def read_file(file_path: str) -> dict:
+    """
+    读取mcp服务器的文件
+    
+    Args:
+        file_path: 文件的路径
+    """
+    try:
+        # 这里应该包含实际的文件读取逻辑
+        # 例如：检查文件是否存在，验证文件路径安全性等
+        
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        
+        return {
+            "success": True,
+            "content": content,
+            "file_path": file_path
+        }
+    
+    except FileNotFoundError:
+        return {
+            "success": False,
+            "error": f"文件未找到: {file_path}",
+            "file_path": file_path
+        }
+    except PermissionError:
+        return {
+            "success": False, 
+            "error": f"权限不足: {file_path}",
+            "file_path": file_path
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"读取文件时出错: {str(e)}",
+            "file_path": file_path
+        }
+
+
 
 
 
@@ -1194,6 +1226,7 @@ if __name__ == "__main__":
                     raise e
         server = flask_plot.MemoryImageServer(port=6760)
         server.start()
+        crystalmanager = flask_builder.CrystalManager()
         mcp.run(
             # transport="streamable-http",
             transport="sse",

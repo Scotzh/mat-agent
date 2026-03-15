@@ -86,7 +86,7 @@ class MemoryImageServer:
         )
         t.start()
         time.sleep(1)
-        print(f"🚀 内存服务器已启动: http://{local_host}:{self.port}")
+        print(f"🚀 内存图片服务器已在端口 {self.port} 开启")
 
     def add_image(self, img_buffer: io.BytesIO) -> str:
         """

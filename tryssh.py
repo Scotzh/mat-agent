@@ -391,9 +391,8 @@ class VaspTaskInitializer:
                 # band_info['band'] = v.eigenvalue_band_properties
                 band_info['is_metal'] = bs.is_metal()
                 band_info['gap'] = bs.get_band_gap()
-                if not bs.is_metal:
-                    band_info['vbm'] = bs.get_vbm()
-                    band_info['cbm'] = bs.get_cbm()
+                band_info['vbm'] = bs.get_vbm()
+                band_info['cbm'] = bs.get_cbm()
             except Exception as e:
                 print(f"解析能带XML失败: {e}")
 
@@ -402,6 +401,135 @@ class VaspTaskInitializer:
             "band_info": band_info,
             "local_files": downloaded_info
         }
+    
+    def excute_command(self, command: str) -> dict:
+            """
+            在远程服务器执行命令
+            """
+            if not isinstance(command, str) or not command.strip():
+                return {
+                    "status": "error",
+                    "message": "命令为空或无效"
+                }
+
+            normalized = command.strip().lower()
+
+            # 禁止的危险命令关键字/模式
+            deny_patterns = [
+                r"\brm\s+-rf\b",
+                r"\brm\s+-r\b",
+                r"\brm\s+-f\b",
+                r"\bshutdown\b",
+                r"\breboot\b",
+                r"\bpoweroff\b",
+                r"\bsystemctl\s+reboot\b",
+                r"\bsystemctl\s+poweroff\b",
+                r"\binit\s+0\b",
+                r"\bmkfs\b",
+                r"\bdd\b",
+                r"\bchmod\s+[a-z0-9]*777\b",
+                r"\bchown\b",
+                r"\bpasswd\b",
+                r"\buseradd\b",
+                r"\buserdel\b",
+                r"\bsudo\b",
+                r"\bcurl\b.*\|.*sh",
+                r"\bwget\b.*\|.*sh",
+                r"\bpython\s+-c\b",
+                r"\bperl\s+-e\b",
+                r"\bphp\s+-r\b",
+                r"\bpkill\b",
+                r"\bkillall\b"
+            ]
+
+            for pat in deny_patterns:
+                if re.search(pat, normalized):
+                    return {
+                        "status": "rejected",
+                        "message": "检测到危险命令，已拒绝执行",
+                        "reason": f"危险命令匹配: {pat}"
+                    }
+
+            # 禁止常见的直接删除根目录或写入系统文件
+            if re.search(r"\brm\s+-rf\s+/\b", normalized) or re.search(r"\b>\s*/etc/", normalized):
+                return {
+                    "status": "rejected",
+                    "message": "检测到危险命令，已拒绝执行",
+                    "reason": "禁止删除根目录或覆盖系统文件"
+                }
+
+            try:
+                stdin, stdout, stderr = self.ssh.exec_command(command)
+                out = stdout.read().decode(errors='ignore')
+                err = stderr.read().decode(errors='ignore')
+                return {
+                    "status": "ok",
+                    "command": command,
+                    "stdout": out,
+                    "stderr": err
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": "远程执行命令失败",
+                    "error": str(e)
+                }
+
+    def excute_python(self, command: str) -> dict:
+        """
+        在远程服务器上执行 Python 命令（当作 shell 命令执行）
+        """
+        if not isinstance(command, str) or not command.strip():
+            return {
+                "status": "error",
+                "message": "Python 命令为空或无效"
+            }
+
+        normalized = command.strip().lower()
+        unsafe_patterns = [
+            r"\bimport\s+os\b",
+            r"\bimport\s+subprocess\b",
+            r"\bos\.system\b",
+            r"\bsubprocess\.Popen\b",
+            r"\bsubprocess\.call\b",
+            r"\bopen\(.*['\"/]etc['\"]",
+            r"\b__import__\b",
+            r"\beval\b",
+            r"\bexec\b",
+            r"\bcompile\b",
+            r"\bimportlib\b",
+            r"\bsys\.exit\b",
+            r"\bexit\(\)\b"
+        ]
+
+        for pat in unsafe_patterns:
+            if re.search(pat, normalized):
+                return {
+                    "status": "rejected",
+                    "message": "检测到危险 Python 操作，已拒绝执行",
+                    "reason": f"危险模式匹配: {pat}"
+                }
+
+        # 如果需要只允许有限的 Python 语句，下面可以额外添加白名单逻辑
+        try:
+            # 这里通过在远程 shell 执行 python -c 来运行
+            safe_payload = command.replace('"', '\\"').replace('$', '\\$')
+            remote_cmd = f"python3 -c \"{safe_payload}\""
+            stdin, stdout, stderr = self.ssh.exec_command(remote_cmd)
+            out = stdout.read().decode(errors='ignore')
+            err = stderr.read().decode(errors='ignore')
+            return {
+                "status": "ok",
+                "command": remote_cmd,
+                "stdout": out,
+                "stderr": err
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": "远程执行 Python 命令失败",
+                "error": str(e)
+            }
 
 
 if __name__ == "__main__":
