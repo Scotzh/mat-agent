@@ -94,7 +94,7 @@ class MemoryImageServer:
         """
 
         # 如果缓存超过 100 张，删除最早的一张（先进先出）
-        if len(self.image_cache) > 100:
+        if len(self.image_cache) > 50:
             first_key = next(iter(self.image_cache))
             del self.image_cache[first_key]
         image_id = uuid.uuid4().hex

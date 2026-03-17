@@ -348,6 +348,7 @@ async def build_structure(a: float,
         if not res["error"]:
             image = res["Image"]
             return {
+                "image": image,
                 "3d_image_url": structure_url,
                 "message": message
                 }
@@ -1251,7 +1252,7 @@ if __name__ == "__main__":
         mcp.run(
             # transport="streamable-http",
             transport="sse",
-            host="127.0.0.1",
+            host="0.0.0.0",
             port=8000
         )
     except Exception as e:
