@@ -1056,6 +1056,27 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
     
+@mcp.tool()
+async def submit_band_mission(task_directory: str) -> dict:
+    """
+    提交能带计算任务到远程服务器
+    
+    Args:
+        task_directory: 任务目录路径
+    Returns:
+        任务提交结果
+    """
+    try:
+        with connection as vasp_task:
+            result = None
+            for _ in range(3):
+                result = vasp_task.band_calc(task_directory)
+                if result:
+                    break
+            return result
+    except Exception as e:
+        return {"error": str(e), "message": "任务提交失败"}
+    
 
 @mcp.tool()
 async def excute_command(command: str) -> dict:

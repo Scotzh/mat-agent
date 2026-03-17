@@ -402,6 +402,23 @@ class VaspTaskInitializer:
             "local_files": downloaded_info
         }
     
+    def state_density_calc(self, task_dir):
+        """
+        进行态密度计算
+        """
+        command = f"cd '{task_dir}' && ./../auto_band.sh"
+        stdin, stdout, stderr = self.ssh.exec_command(command)
+        output = stdout.read().decode()
+        error = stderr.read().decode()
+        print(output)
+        print(error)
+        return {"status": "结构优化任务已提交",
+                "command": command,
+                'stdout': str(output),
+                'stderr': str(error)}
+
+    
+    
     def excute_command(self, command: str) -> dict:
             """
             在远程服务器执行命令
