@@ -1057,30 +1057,30 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
     
-@mcp.tool()
-async def submit_band_mission(task_directory: str) -> dict:
-    """
-    提交能带计算任务到远程服务器
+# @mcp.tool()
+# async def submit_band_mission(task_directory: str) -> dict:
+#     """
+#     提交能带计算任务到远程服务器
     
-    Args:
-        task_directory: 任务目录路径
-    Returns:
-        任务提交结果
-    """
-    try:
-        with connection as vasp_task:
-            result = None
-            for _ in range(3):
-                result = vasp_task.band_calc(task_directory)
-                if result:
-                    break
-            return result
-    except Exception as e:
-        return {"error": str(e), "message": "任务提交失败"}
+#     Args:
+#         task_directory: 任务目录路径
+#     Returns:
+#         任务提交结果
+#     """
+#     try:
+#         with connection as vasp_task:
+#             result = None
+#             for _ in range(3):
+#                 result = vasp_task.band_calc(task_directory)
+#                 if result:
+#                     break
+#             return result
+#     except Exception as e:
+#         return {"error": str(e), "message": "任务提交失败"}
     
 
 @mcp.tool()
-async def excute_command(command: str) -> dict:
+async def execute_command(command: str) -> dict:
     """
     在计算服务器上执行linux命令（注意计算服务器和mcp服务器不是同一个服务器）
     若要执行python
@@ -1096,6 +1096,27 @@ async def excute_command(command: str) -> dict:
     except Exception as e:
         return {"error": str(e), "message": "命令提交或执行失败"}
     
+
+@mcp.tool()
+async def extract_file(file_path: str) -> dict:
+    """
+    从计算服务器上提取一个文件，并提供下载的url
+    Args:
+        file_path: 文件的路径（计算服务器上的）
+    Returns:
+        下载url
+    """ 
+    try:
+        with connection as vasp_task:
+            result = vasp_task.extract_file(file_path=file_path)
+            download_url = server.upload_local_file(result["local_file"])
+            result["download_url"] = download_url
+            return result
+    except Exception as e:
+        return {"error": str(e), "message": "命令提交或执行失败"}
+
+
+
 # 机器学习模块
 @mcp.tool()
 async def predict_band_gap(formula:str | list[str]) -> dict:
@@ -1119,70 +1140,70 @@ async def predict_band_gap(formula:str | list[str]) -> dict:
 
 
 
-import json
+# import json
 
-WORKFLOW_FILE = "material_workflow.json"
+# WORKFLOW_FILE = "material_workflow.json"
 
 
-def load_workflows():
-    try:
-        with open(WORKFLOW_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
+# def load_workflows():
+#     try:
+#         with open(WORKFLOW_FILE, "r") as f:
+#             return json.load(f)
+#     except FileNotFoundError:
+#         return {}
 
-def save_workflows(data):
-    with open(WORKFLOW_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+# def save_workflows(data):
+#     with open(WORKFLOW_FILE, "w") as f:
+#         json.dump(data, f, indent=4)
 
-@mcp.tool()
-async def set_task_progress(project_name: str, description: str = "", step_name: str = "", status: str = "") -> str:
-    """
-    用简单的字典记录项目进度。
-    Args:
-        project_name: 项目或材料名称 (如 "MoS2_Bandgap_Study")
-        description: 项目描述 (如 "本项目旨在研究MoS2的带隙,将进行晶体建模、结构优化和自洽计算，目前已进行到结构优化阶段，下一步是自洽计算")
-        step_name: 步骤名称 (如 "VASP_Opt")
-        status: 状态 (如 "Pending", "Running", "Completed", "Failed")
-    """
-    db = load_workflows()
-    if project_name not in db:
-        db[project_name] = {}
-    if description:
-        db[project_name]["description"] = description
-    if step_name and status:
-        db[project_name][step_name] = {
-            "status": status,
-            "time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
-        }
-    save_workflows(db)
-    return f"项目 {project_name} 的步骤 {step_name} 已更新为 {status}。项目描述：{description}。"
+# @mcp.tool()
+# async def set_task_progress(project_name: str, description: str = "", step_name: str = "", status: str = "") -> str:
+#     """
+#     用简单的字典记录项目进度。
+#     Args:
+#         project_name: 项目或材料名称 (如 "MoS2_Bandgap_Study")
+#         description: 项目描述 (如 "本项目旨在研究MoS2的带隙,将进行晶体建模、结构优化和自洽计算，目前已进行到结构优化阶段，下一步是自洽计算")
+#         step_name: 步骤名称 (如 "VASP_Opt")
+#         status: 状态 (如 "Pending", "Running", "Completed", "Failed")
+#     """
+#     db = load_workflows()
+#     if project_name not in db:
+#         db[project_name] = {}
+#     if description:
+#         db[project_name]["description"] = description
+#     if step_name and status:
+#         db[project_name][step_name] = {
+#             "status": status,
+#             "time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+#         }
+#     save_workflows(db)
+#     return f"项目 {project_name} 的步骤 {step_name} 已更新为 {status}。项目描述：{description}。"
 
-@mcp.tool()
-async def list_all_projects() -> list[str]:
-    """
-    列出当前所有材料研发项目的名称。
-    用于在开始工作前确认有哪些正在进行的项目。
-    """
-    db = load_workflows()
-    return list(db.keys())
+# @mcp.tool()
+# async def list_all_projects() -> list[str]:
+#     """
+#     列出当前所有材料研发项目的名称。
+#     用于在开始工作前确认有哪些正在进行的项目。
+#     """
+#     db = load_workflows()
+#     return list(db.keys())
 
-@mcp.tool()
-async def get_project_workflow(project_name: str) -> dict:
-    """
-    根据项目名称查看具体的任务清单和进度。
+# @mcp.tool()
+# async def get_project_workflow(project_name: str) -> dict:
+#     """
+#     根据项目名称查看具体的任务清单和进度。
     
-    Args:
-        project_name: 项目名称（如 "Li3InCl6_Optimization"）
-    """
-    db = load_workflows()
-    if project_name not in db:
-        return {"error": f"未找到名为 '{project_name}' 的项目", "current_projects": list(db.keys())}
+#     Args:
+#         project_name: 项目名称（如 "Li3InCl6_Optimization"）
+#     """
+#     db = load_workflows()
+#     if project_name not in db:
+#         return {"error": f"未找到名为 '{project_name}' 的项目", "current_projects": list(db.keys())}
     
-    return {
-        "project": project_name,
-        "workflow": db[project_name]
-    }
+#     return {
+#         "project": project_name,
+#         "workflow": db[project_name]
+#     }
 
 @mcp.tool()
 async def read_file(file_path: str) -> dict:
@@ -1246,7 +1267,7 @@ if __name__ == "__main__":
                 print(f"连接远程服务器失败，正在重试... ({i+1}/5)")
                 if i == 4:
                     raise e
-        server = flask_plot.MemoryImageServer(port=6760)
+        server = flask_plot.MemoryFileServer(port=6760)
         server.start()
         crystalmanager = flask_builder.CrystalManager()
         mcp.run(

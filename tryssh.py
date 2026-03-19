@@ -417,9 +417,48 @@ class VaspTaskInitializer:
                 'stdout': str(output),
                 'stderr': str(error)}
 
-    
-    
-    def excute_command(self, command: str) -> dict:
+    def extract_file(self, file_path: str) -> dict:
+        """
+        从计算服务器中提取指定文件并返回本地保存地址。
+        """
+        if not isinstance(file_path, str) or not file_path.strip():
+            return {
+                "status": "error",
+                "message": "file_path 不能为空"
+            }
+
+        remote_file_path = file_path.strip()
+        output_dir = "./calculation_output/any"
+        os.makedirs(output_dir, exist_ok=True)
+        local_file_path = os.path.join(output_dir, os.path.basename(remote_file_path))
+
+        # 允许覆盖：如果本地文件已存在，则先删除
+        if os.path.exists(local_file_path):
+            try:
+                os.remove(local_file_path)
+            except Exception as e:
+                # 删除失败也不终止下载，继续尝试覆盖
+                print(f"警告：无法删除旧文件 {local_file_path}：{e}")
+
+        try:
+            self.sftp.get(remote_file_path, local_file_path)
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"下载文件失败: {e}",
+                "remote_file": remote_file_path,
+                "local_file": local_file_path
+            }
+
+        return {
+            "status": "ok",
+            "message": "文件已保存",
+            "remote_file": remote_file_path,
+            "local_file": local_file_path
+        }
+
+    def execute_command(self, command: str) -> dict:
+
             """
             在远程服务器执行命令
             """

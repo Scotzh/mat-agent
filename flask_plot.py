@@ -5,113 +5,109 @@ import shutil
 import threading
 from flask import Flask, send_from_directory, send_file, abort
 import io
-
+import mimetypes
 
 config = loadenv.Config()
 local_host = config.get_ip()
 
-class ImageServer:
-    def __init__(self, port=8080, folder="web_cache"):
-        self.port = port
-        self.upload_folder = os.path.abspath(folder)
-        self.app = Flask(__name__)
-        
-        if not os.path.exists(self.upload_folder):
-            os.makedirs(self.upload_folder)
-
-        @self.app.route('/image/<filename>')
-        def serve_image(filename):
-            # 加上 mimetype 强制浏览器识别为图片
-            return send_from_directory(self.upload_folder, filename, mimetype='image/png')
-
-        @self.app.route('/')
-        def index():
-            return "<h1>WSL Image Server is Running</h1>"
-
-    def start(self):
-        # 关键修改：直接在主线程启动测试，或者确保 host 绑定正确
-        # 这里使用 0.0.0.0 是为了让 Windows 能通过虚拟网卡 IP 访问
-        def run_flask():
-            self.app.run(host='0.0.0.0', port=self.port, debug=False, use_reloader=False)
-        
-        self.thread = threading.Thread(target=run_flask, daemon=True)
-        self.thread.start()
-        time.sleep(2) # 给 WSL 更多响应时间
-        print(f"🚀 WSL 内部服务已启动，端口: {self.port}")
-
-    def generate_url(self, local_path):
-        # ... (之前的复制逻辑保持不变)
-        ext = os.path.splitext(local_path)[1]
-        unique_name = f"{uuid.uuid4().hex}{ext}"
-        shutil.copy2(local_path, os.path.join(self.upload_folder, unique_name))
-        
-        # 重点：在 WSL 环境下，建议直接尝试 localhost，
-        # 如果 localhost 不行，再手动换成终端显示的 172.x.x.x IP
-        return f"http://{local_host}:{self.port}/image/{unique_name}"
-
-
-
-class MemoryImageServer:
+class MemoryFileServer:
     def __init__(self, host="0.0.0.0", port=8080):
         self.host = host
         self.port = port
         self.app = Flask(__name__)
-        # 用字典在内存里存图片数据: { "uuid": b'binary_data' }
-        self.image_cache = {}
+        
+        # 初始化两个缓存字典
+        self.image_cache = {}  # 专门存图片
+        self.file_cache = {}   # 存通用文件
+        
         self._setup_routes()
 
     def _setup_routes(self):
+        # 1. 图片查看路由
         @self.app.route('/image/<image_id>')
         def serve_image(image_id):
             if image_id not in self.image_cache:
                 abort(404)
-            
-            # 从内存中读取二进制流并返回
             img_data = self.image_cache[image_id]
             return send_file(
                 io.BytesIO(img_data),
-                mimetype='image/png',
-                download_name=f"{image_id}.png"
+                mimetype='image/png'
             )
 
+        # 2. 文件下载路由
+        @self.app.route('/download/<file_id>')
+        def download_file(file_id):
+            if file_id not in self.file_cache:
+                abort(404)
+            file_info = self.file_cache[file_id]
+            return send_file(
+                io.BytesIO(file_info["data"]),
+                mimetype=file_info["mime"],
+                as_attachment=True,
+                download_name=file_info["filename"]
+            )
+
+        # 3. 首页状态
         @self.app.route('/')
         def index():
-            count = len(self.image_cache)
-            return f"<h1>内存图片服务器</h1><p>当前缓存图片数: {count}</p>"
+            return (f"<h1>文件服务器运行中</h1>"
+                    f"<li>图片缓存: {len(self.image_cache)}</li>"
+                    f"<li>文件缓存: {len(self.file_cache)}</li>")
 
     def start(self):
+        # 线程启动 Flask
         t = threading.Thread(
             target=lambda: self.app.run(host=self.host, port=self.port, threaded=True, debug=False, use_reloader=False),
             daemon=True
         )
         t.start()
         time.sleep(1)
-        print(f"🚀 内存图片服务器已在端口 {self.port} 开启")
+        print(f"🚀 混合文件服务器已在端口 {self.port} 开启")
 
     def add_image(self, img_buffer: io.BytesIO) -> str:
-        """
-        输入一个 BytesIO 对象，存入内存并返回 URL
-        """
-
-        # 如果缓存超过 100 张，删除最早的一张（先进先出）
+        """ 存入内存图片并返回预览 URL """
         if len(self.image_cache) > 50:
             first_key = next(iter(self.image_cache))
             del self.image_cache[first_key]
+            
         image_id = uuid.uuid4().hex
-        # 获取二进制数据存入字典
         img_buffer.seek(0)
         self.image_cache[image_id] = img_buffer.read()
         
-        # 返回访问链接
         return f"http://{local_host}:{self.port}/image/{image_id}"
 
+    def upload_local_file(self, local_path: str) -> str:
+        """ 存入任意文件并返回下载 URL """
+        if not os.path.exists(local_path):
+            return f"错误：文件 {local_path} 不存在"
+
+        # 缓存清理
+        if len(self.file_cache) > 10:
+            first_key = next(iter(self.file_cache))
+            del self.file_cache[first_key]
+
+        filename = os.path.basename(local_path)
+        mime_type, _ = mimetypes.guess_type(local_path)
+        mime_type = mime_type or "application/octet-stream"
+
+        with open(local_path, "rb") as f:
+            file_data = f.read()
+
+        file_id = uuid.uuid4().hex
+        self.file_cache[file_id] = {
+            "data": file_data,
+            "filename": filename,
+            "mime": mime_type
+        }
+
+        return f"http://{local_host}:{self.port}/download/{file_id}"
 # --- 使用示例 (配合 Matplotlib) ---
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # 1. 启动服务器 (换成 8080 避开 6666 坑点)
-    server = MemoryImageServer(port=6760)
+    server = MemoryFileServer(port=6760)
     server.start()
 
     # 2. 模拟 Matplotlib 绘图并保存到 BytesIO
