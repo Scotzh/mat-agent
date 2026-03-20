@@ -1091,7 +1091,7 @@ async def execute_command(command: str) -> dict:
     """
     try:
         with connection as vasp_task:
-            result = vasp_task.excute_command(command)
+            result = vasp_task.execute_command(command)
             return result
     except Exception as e:
         return {"error": str(e), "message": "命令提交或执行失败"}
