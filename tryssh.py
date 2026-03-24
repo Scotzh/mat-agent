@@ -6,6 +6,7 @@ from pymatgen.io import vasp
 from typing import Dict, List, Optional, Union
 import loadenv
 import re
+import numpy as np
 
 
 class VaspTaskInitializer:
@@ -340,7 +341,7 @@ class VaspTaskInitializer:
         error = stderr.read().decode()
         print(output)
         print(error)
-        return {"status": "结构优化任务已提交",
+        return {"status": "能带计算任务已提交",
                 "command": command,
                 'stdout': str(output),
                 'stderr': str(error)}
@@ -402,20 +403,139 @@ class VaspTaskInitializer:
             "local_files": downloaded_info
         }
     
-    def state_density_calc(self, task_dir):
+    def dos_calc(self, task_dir):
         """
         进行态密度计算
         """
-        command = f"cd '{task_dir}' && ./../auto_band.sh"
+        command = f"cd '{task_dir}' && ./../auto_dos.sh"
         stdin, stdout, stderr = self.ssh.exec_command(command)
         output = stdout.read().decode()
         error = stderr.read().decode()
         print(output)
         print(error)
-        return {"status": "结构优化任务已提交",
+        return {"status": "态密度计算任务已提交",
                 "command": command,
                 'stdout': str(output),
                 'stderr': str(error)}
+    
+    def extract_dos_info(self, task_dir):
+        """
+        提取态密度计算结果并下载数据文件
+        参考VASPKIT文档：功能31用于提取DOS数据
+        """
+        dos_dir = os.path.join(task_dir, "态密度计算")
+        
+        # 1. 远程调用 VASPKIT 31 提取DOS数据
+        # 31: DOS数据处理，311: 提取总态密度(TDOS)
+        extract_cmd = f"cd '{dos_dir}' && echo -e '31\\n311' | vaspkit"
+        self.ssh.exec_command(extract_cmd)
+        
+        # 2. 可选：提取特定原子的投影态密度(PDOS)
+        # 这里可以添加交互式选择，简化版先提取所有原子的总PDOS
+        # extract_pdos_cmd = f"cd '{dos_dir}' && echo -e '31\\n312\\nall\\nall' | vaspkit"
+        # self.ssh.exec_command(extract_pdos_cmd)
+        
+        # 3. 准备本地目录
+        local_output = "./calculation_output/dos"
+        os.makedirs(local_output, exist_ok=True)
+        file_prefix = os.path.basename(task_dir.rstrip('/'))
+        
+        # 4. 定义需要下载的文件列表
+        files_to_download = {
+            "vasprun.xml": f"{file_prefix}_vasprun.xml",
+            "DOSCAR": f"{file_prefix}_DOSCAR",
+            "TDOS.dat": f"{file_prefix}_TDOS.dat",
+            "PDOS.dat": f"{file_prefix}_PDOS.dat",
+            "DOS.jpg": f"{file_prefix}_DOS.jpg",
+            "OUTCAR": f"{file_prefix}_OUTCAR",
+            "INCAR": f"{file_prefix}_INCAR",
+        }
+        
+        # 5. 检查并下载PDOS相关文件（如果存在）
+        # 根据VASPKIT文档，PDOS文件命名格式：PDOS_A1.dat, PDOS_A2.dat等
+        try:
+            stdin, stdout, stderr = self.ssh.exec_command(f"cd '{dos_dir}' && ls PDOS_*.dat 2>/dev/null || echo ''")
+            pdos_files = stdout.read().decode().strip().split()
+            for pdos_file in pdos_files:
+                if pdos_file:
+                    local_name = f"{file_prefix}_{pdos_file}"
+                    files_to_download[pdos_file] = local_name
+        except:
+            pass
+        
+        downloaded_info = {}
+        for remote_name, local_name in files_to_download.items():
+            remote_f = os.path.join(dos_dir, remote_name)
+            local_f = os.path.join(local_output, local_name)
+            try:
+                self.sftp.get(remote_f, local_f)
+                downloaded_info[remote_name] = local_f
+            except:
+                print(f"提醒: 未能下载 {remote_name}，可能文件不存在或计算未完成。")
+        
+        # 6. 解析DOS信息
+        dos_info = {}
+        
+        # 6.1 从OUTCAR解析费米能级
+        if "OUTCAR" in downloaded_info:
+            try:
+                with open(downloaded_info["OUTCAR"], 'r') as f:
+                    content = f.read()
+                    # 查找费米能级
+                    fermi_lines = [line for line in content.split('\n') if 'E-fermi' in line]
+                    if fermi_lines:
+                        fermi_line = fermi_lines[-1]  # 取最后一个
+                        efermi = float(fermi_line.split())
+                        dos_info['fermi_energy'] = efermi
+                        print(f"费米能级: {efermi} eV")
+            except Exception as e:
+                print(f"解析OUTCAR失败: {e}")
+        
+        # 6.2 从TDOS.dat解析DOS数据
+        if "TDOS.dat" in downloaded_info:
+            try:
+                # 读取TDOS数据
+                tdos_data = np.loadtxt(downloaded_info["TDOS.dat"])
+                if len(tdos_data.shape) == 2:
+                    energies = tdos_data[:, 0]
+                    dos_values = tdos_data[:, 1] if tdos_data.shape[1] > 1 else tdos_data[:, 1:]
+                    
+                    # 计算积分态密度（电子数）
+                    if 'fermi_energy' in dos_info:
+                        efermi = dos_info['fermi_energy']
+                        # 找到费米能级附近的索引
+                        fermi_idx = np.argmin(np.abs(energies - efermi))
+                        # 计算费米能级以下的积分
+                        if fermi_idx > 0:
+                            integrated_dos = np.trapezoid(dos_values[:fermi_idx], energies[:fermi_idx])
+                            dos_info['integrated_dos'] = integrated_dos
+                            print(f"费米能级以下积分态密度: {integrated_dos:.4f} 电子数")
+                    
+                    # 计算DOS最大值和位置
+                    max_dos_idx = np.argmax(dos_values)
+                    dos_info['max_dos'] = dos_values[max_dos_idx]
+                    dos_info['max_dos_energy'] = energies[max_dos_idx]
+                    print(f"最大DOS值: {dos_values[max_dos_idx]:.4f} states/eV at {energies[max_dos_idx]:.4f} eV")
+                    
+                    # 计算DOS宽度（超过阈值的能量范围）
+                    threshold = 0.01 * dos_info['max_dos']  # 最大值的1%作为阈值
+                    significant_indices = np.where(dos_values > threshold)
+                    if len(significant_indices) > 0:
+                        dos_info['dos_width'] = energies[significant_indices[-1]] - energies[significant_indices[0]]
+                        print(f"DOS宽度: {dos_info['dos_width']:.4f} eV")
+            except Exception as e:
+                print(f"解析TDOS.dat失败: {e}")
+        
+                    
+            except ImportError:
+                print("pymatgen未安装，跳过详细解析")
+            except Exception as e:
+                print(f"pymatgen解析失败: {e}")
+        return {
+            "status": "提取完成",
+            "dos_info": dos_info,
+            "local_files": downloaded_info,
+        }
 
     def extract_file(self, file_path: str) -> dict:
         """

@@ -1,5 +1,7 @@
 from datetime import datetime
-
+from warnings import simplefilter
+# ignore all future warnings
+simplefilter(action='ignore', category=FutureWarning)
 from fastmcp import FastMCP
 import asyncio
 import os
@@ -863,7 +865,7 @@ async def submit_opt_mission(task_directory: str) -> dict:
 @mcp.tool()
 async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize: bool = False) -> dict:
     """
-    提取结构优化任务的结果信息
+    提取结构优化任务的结果信息，直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“结构优化”文件夹提取结果，若无结果，则请先进行计算
     Args:
         task_directory: 任务目录路径
         get_plot: 是否生成结构预览图
@@ -928,7 +930,7 @@ async def submit_scf_mission(task_directory: str, custom_incar: dict = None) -> 
 @mcp.tool()
 async def extract_scf_info(task_directory: str) -> dict:
     """
-    提取自洽计算任务的结果信息
+    提取自洽计算任务的结果信息，直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“自洽计算”文件夹提取结果，若无结果，则请先进行计算
     Args:
         task_directory: 任务目录路径
     Returns:
@@ -1036,7 +1038,7 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
     """
     提取能带计算任务的结果信息
     Args:
-        task_directory: 任务目录路径
+        task_directory: 任务目录路径，直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“能带计算”文件夹提取结果，若无结果，则请先进行计算
         plot_band: 是否绘制能带图
     Returns:
         能带计算结果信息
@@ -1057,27 +1059,482 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
     
-# @mcp.tool()
-# async def submit_band_mission(task_directory: str) -> dict:
-#     """
-#     提交能带计算任务到远程服务器
+@mcp.tool()
+async def submit_dos_mission(task_directory: str) -> dict:
+    """
+    提交态密度计算任务到远程服务器
     
-#     Args:
-#         task_directory: 任务目录路径
-#     Returns:
-#         任务提交结果
-#     """
-#     try:
-#         with connection as vasp_task:
-#             result = None
-#             for _ in range(3):
-#                 result = vasp_task.band_calc(task_directory)
-#                 if result:
-#                     break
-#             return result
-#     except Exception as e:
-#         return {"error": str(e), "message": "任务提交失败"}
+    Args:
+        task_directory: 任务目录路径
+    Returns:
+        任务提交结果
+    """
+    try:
+        with connection as vasp_task:
+            result = None
+            for _ in range(3):
+                result = vasp_task.dos_calc(task_directory)
+                if result:
+                    break
+            return result
+    except Exception as e:
+        return {"error": str(e), "message": "任务提交失败"}
     
+@mcp.tool()
+async def extract_dos_info(task_directory: str,
+                           plot_dos: bool = True) -> dict:
+    """
+    提取态密度计算任务的结果信息，并按 `plot_vasp_dos` 生成图像。直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“态密度计算”文件夹提取结果，若无结果，则请先进行计算
+
+    Args:
+        task_directory: 任务目录路径
+        plot_dos: 是否绘制态密度图
+
+    Returns:
+        态密度计算结果信息
+    """
+    try:
+        with connection as vasp_task:
+            result = vasp_task.extract_dos_info(task_directory)
+            if plot_dos and result and isinstance(result, dict):
+                local_files = result.get('local_files', {}) or {}
+                vasprun_path = local_files.get('vasprun.xml') or local_files.get('vasprun')
+
+                if vasprun_path and os.path.exists(vasprun_path):
+                    res = plot_vasp_dos_analysis(
+                        vasprun_path,
+                        # plot_type=plot_type,
+                        # elements=elements,
+                        # orbitals=orbitals,
+                        # site_dict=site_dict,
+                    )
+
+                    image = res.get('Image') if isinstance(res, dict) else None
+                    payload = {k: v for k, v in res.items() if k != 'Image'} if isinstance(res, dict) else {}
+                    if not res.get('error'):
+                        result.update({
+                            'image_url': image,
+                            'plot_info': payload,
+                            'message': '绘图成功',
+                        })
+                    else:
+                        result.update({
+                            'image_url': image,
+                            'plot_info': payload,
+                            'message': '绘图失败',
+                        })
+                else:
+                    result.setdefault('warnings', []).append('vasprun.xml文件缺失，无法绘图。')
+            return result
+    except Exception as e:
+        return {'error': str(e), 'message': '提取任务结果失败'}
+
+import matplotlib as mpl
+from pymatgen.io.vasp.outputs import Vasprun
+
+def apply_scientific_style():
+    """优化后的出版级绘图风格"""
+    okabe_ito = ['#000000', '#E69F00', '#56B4E9', '#009E73', '#F0E442',
+                 '#0072B2', '#D55E00', '#CC79A7']
+    
+    mpl.rcParams.update({
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Arial', 'Liberation Sans'],
+        'font.size': 9,
+        'axes.labelsize': 10,
+        'axes.titlesize': 11,
+        'xtick.direction': 'in',
+        'ytick.direction': 'in',
+        'axes.spines.top': False,
+        'axes.spines.right': False,
+        'axes.prop_cycle': plt.cycler(color=okabe_ito),
+        'figure.dpi': 150
+    })
+    return okabe_ito
+
+def _get_density_array(dos_obj):
+    """
+    通用助手：从 Dos 对象中提取密度数组（不处理自旋，取第一条线）。
+    解决 pymatgen 返回字典而非数组的问题。
+    """
+    # 确保 densities 是字典且不为空
+    assert hasattr(dos_obj, "densities") and dos_obj.densities, "Dos 对象不包含密度数据"
+    # 取字典中的第一个 value (通常是 Spin.up)
+    return list(dos_obj.densities.values())[0]
+
+def plot_vasp_dos_analysis(vasprun_path="vasprun.xml", material_name="Material"):
+    """
+    主接口：解析 VASP 数据并生成 2x3 综合分析图。
+    保留 get_plot_url 逻辑。
+    """
+    try:
+        # 1. 解析数据
+        print(f"正在解析 {vasprun_path}...")
+        vr = Vasprun(vasprun_path, parse_dos=True)
+        complete_dos = vr.complete_dos
+        
+        # 核心断言
+        assert complete_dos is not None, "无法从 vasprun 提取 CompleteDos"
+        assert hasattr(complete_dos, "energies"), "CompleteDos 对象缺失能量数据"
+        
+        energies = complete_dos.energies - complete_dos.efermi
+        tdos_array = _get_density_array(complete_dos)
+        element_dos = complete_dos.get_element_dos() # 返回 {Element: Dos}
+
+        # 2. DOS数据分析功能
+        def analyze_dos_data(energies, tdos_array, element_dos):
+            """分析DOS数据，返回带隙、费米能级处DOS等关键信息"""
+            analysis_results = {}
+            
+            # 计算能量步长（假设均匀网格）
+            if len(energies) > 1:
+                de = energies[1] - energies[0]  # 修正：取标量值
+                analysis_results['energy_step'] = de
+            
+            # 寻找价带顶和导带底
+            # 价带：能量 < 0 的区域
+            valence_mask = energies < 0
+            conduction_mask = energies > 0
+            
+            if np.any(valence_mask) and np.any(conduction_mask):
+                # 价带顶 (最高占据态能量)
+                valence_energies = energies[valence_mask]
+                valence_dos = tdos_array[valence_mask]
+                # 找到价带中DOS不为0的最高能量点
+                valence_nonzero = valence_dos > 1e-6
+                if np.any(valence_nonzero):
+                    vbm_index = np.argmax(valence_energies[valence_nonzero])
+                    vbm_energy = valence_energies[valence_nonzero][vbm_index]
+                    vbm_dos = valence_dos[valence_nonzero][vbm_index]
+                    analysis_results['valence_band_max'] = float(vbm_energy)
+                    analysis_results['vbm_dos'] = float(vbm_dos)
+                
+                # 导带底 (最低未占据态能量)
+                conduction_energies = energies[conduction_mask]
+                conduction_dos = tdos_array[conduction_mask]
+                # 找到导带中DOS不为0的最低能量点
+                conduction_nonzero = conduction_dos > 1e-6
+                if np.any(conduction_nonzero):
+                    cbm_index = np.argmin(conduction_energies[conduction_nonzero])
+                    cbm_energy = conduction_energies[conduction_nonzero][cbm_index]
+                    cbm_dos = conduction_dos[conduction_nonzero][cbm_index]
+                    analysis_results['conduction_band_min'] = float(cbm_energy)
+                    analysis_results['cbm_dos'] = float(cbm_dos)
+                    
+                    # 计算带隙
+                    if 'valence_band_max' in analysis_results:
+                        band_gap = float(cbm_energy - vbm_energy)
+                        analysis_results['band_gap'] = band_gap
+                        analysis_results['gap_type'] = 'direct' if abs(band_gap - (cbm_energy - vbm_energy)) < 0.01 else 'indirect'
+            
+            # 费米能级处的态密度 (在E=0附近)
+            fermi_window = 0.05  # ±0.05 eV窗口
+            fermi_mask = (energies > -fermi_window) & (energies < fermi_window)
+            if np.any(fermi_mask):
+                fermi_dos_values = tdos_array[fermi_mask]
+                fermi_energies_window = energies[fermi_mask]
+                # 取窗口内的平均值
+                analysis_results['dos_at_fermi'] = float(np.mean(fermi_dos_values))
+                analysis_results['fermi_window_avg'] = float(np.mean(fermi_dos_values))
+                # 费米能级处的精确DOS (通过插值)
+                if len(energies) > 1:
+                    # 线性插值得到E=0处的DOS
+                    dos_at_ef = float(np.interp(0, energies, tdos_array))
+                    analysis_results['dos_at_ef_exact'] = dos_at_ef
+            
+            # 总态密度积分 (总电子数)
+            if len(energies) > 1 and 'energy_step' in analysis_results:
+                de = analysis_results['energy_step']
+                total_electrons = float(np.sum(tdos_array) * de)
+                analysis_results['total_integrated_dos'] = total_electrons
+            
+            # 价带和导带的态密度积分
+            if np.any(valence_mask) and 'energy_step' in analysis_results:
+                de = analysis_results['energy_step']
+                valence_integral = float(np.sum(tdos_array[valence_mask]) * de)
+                analysis_results['valence_integrated_dos'] = valence_integral
+            
+            if np.any(conduction_mask) and 'energy_step' in analysis_results:
+                de = analysis_results['energy_step']
+                conduction_integral = float(np.sum(tdos_array[conduction_mask]) * de)
+                analysis_results['conduction_integrated_dos'] = conduction_integral
+            
+            # 元素投影DOS分析
+            element_contributions = {}
+            if element_dos:
+                for el, dos_obj in element_dos.items():
+                    el_dens = _get_density_array(dos_obj)
+                    # 计算各元素在费米能级附近的贡献
+                    if np.any(fermi_mask):
+                        el_fermi_contrib = float(np.mean(el_dens[fermi_mask]))
+                        if 'energy_step' in analysis_results:
+                            de = analysis_results['energy_step']
+                            element_contributions[str(el)] = {
+                                'fermi_contribution': el_fermi_contrib,
+                                'total_contribution': float(np.sum(el_dens) * de)
+                            }
+                        else:
+                            element_contributions[str(el)] = {
+                                'fermi_contribution': el_fermi_contrib,
+                                'total_contribution': float(np.sum(el_dens))
+                            }
+                analysis_results['element_contributions'] = element_contributions
+            
+            # DOS峰分析
+            try:
+                from scipy.signal import find_peaks
+                peaks, properties = find_peaks(tdos_array, height=0.1, distance=10)
+                if len(peaks) > 0:
+                    peak_info = []
+                    for i, peak_idx in enumerate(peaks[:5]):  # 只取前5个主要峰
+                        peak_info.append({
+                            'energy': float(energies[peak_idx]),
+                            'dos_height': float(tdos_array[peak_idx]),
+                            'relative_to_fermi': float(energies[peak_idx])
+                        })
+                    analysis_results['major_peaks'] = peak_info
+            except ImportError:
+                print("scipy未安装，跳过峰位分析")
+            except Exception as e:
+                print(f"峰位分析失败: {e}")
+            
+            return analysis_results
+        
+        # 执行DOS分析
+        dos_analysis = analyze_dos_data(energies, tdos_array, element_dos)
+
+        # 3. 绘图逻辑 - 2行3列布局
+        colors = apply_scientific_style()
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig.suptitle(f'Electronic Structure Analysis: {material_name}', fontweight='bold')
+
+        # (A) Total DOS
+        ax = axes[0, 0]
+        ax.plot(energies, tdos_array, color='black', lw=1.5, label='Total DOS')
+        ax.fill_between(energies, 0, tdos_array, where=(energies < 0), color='gray', alpha=0.2)
+        ax.axvline(x=0, color='#D55E00', linestyle='--', lw=1, label='$E_F$')
+        
+        # 在图中标注带隙信息
+        if 'band_gap' in dos_analysis:
+            gap_text = f"Band gap: {dos_analysis['band_gap']:.3f} eV"
+            ax.text(0.05, 0.95, gap_text, transform=ax.transAxes, 
+                   fontsize=9, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+        
+        ax.set_title('(A) Total Density of States')
+        ax.set_ylabel('DOS (states/eV)')
+        ax.legend(frameon=False)
+        ax.grid(True, alpha=0.3)
+
+        # (B) Element Projected DOS
+        ax = axes[0, 1]
+        if element_dos:
+            for i, (el, dos_obj) in enumerate(element_dos.items()):
+                dens = _get_density_array(dos_obj)
+                ax.plot(energies, dens, label=str(el), lw=1.3)
+            ax.axvline(x=0, color='#D55E00', linestyle='--', lw=1)
+            ax.set_title('(B) Element Projected DOS')
+            ax.legend(frameon=False, fontsize=9)
+        else:
+            ax.text(0.5, 0.5, "No Element PDOS found", ha='center', transform=ax.transAxes)
+        ax.grid(True, alpha=0.3)
+
+        # (C) Near-Fermi Region (Zoomed)
+        ax = axes[0, 2]
+        mask = (energies > -4) & (energies < 4)
+        ax.plot(energies[mask], tdos_array[mask], color='black', lw=1.2)
+        ax.fill_between(energies[mask], 0, tdos_array[mask], where=(energies[mask] < 0), color='#56B4E9', alpha=0.3)
+        ax.axvline(x=0, color='#D55E00', linestyle='--', lw=1)
+        
+        # 标注费米能级处DOS
+        if 'dos_at_ef_exact' in dos_analysis:
+            fermi_dos_text = f"DOS(E$_F$) = {dos_analysis['dos_at_ef_exact']:.3f}"
+            ax.text(0.05, 0.95, fermi_dos_text, transform=ax.transAxes,
+                   fontsize=9, verticalalignment='top',
+                   bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        
+        ax.set_title('(C) Near-Fermi Region (±4 eV)')
+        ax.set_xlabel('Energy - $E_F$ (eV)')
+        ax.set_ylabel('DOS (states/eV)')
+        ax.grid(True, alpha=0.3)
+
+        # (D) Integrated DOS
+        ax = axes[1, 0]
+        if len(energies) > 1:
+            de = energies[1] - energies[0]  # 修正：取标量值
+            integrated = np.cumsum(tdos_array) * de
+            ax.plot(energies, integrated, color='#009E73', lw=1.5)
+            
+            # 标注总电子数
+            if 'total_integrated_dos' in dos_analysis:
+                total_electrons = dos_analysis['total_integrated_dos']
+                ax.text(0.05, 0.95, f"Total e$^-$: {total_electrons:.1f}", 
+                       transform=ax.transAxes, fontsize=9, verticalalignment='top',
+                       bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+        else:
+            ax.text(0.5, 0.5, "Insufficient data\nfor integration", 
+                   ha='center', va='center', transform=ax.transAxes)
+        
+        ax.set_title('(D) Integrated DOS')
+        ax.set_ylabel('Cumulative Electrons')
+        ax.set_xlabel('Energy - $E_F$ (eV)')
+        ax.grid(True, alpha=0.3)
+
+        # (E) 元素贡献饼图
+        ax = axes[1, 1]
+        if element_dos and 'element_contributions' in dos_analysis:
+            element_contributions = dos_analysis['element_contributions']
+            
+            # 提取元素和贡献值
+            elements = []
+            fermi_contributions = []
+            
+            for el, contrib in element_contributions.items():
+                elements.append(el)
+                fermi_contributions.append(contrib['fermi_contribution'])
+            
+            # 过滤掉贡献为0的元素
+            valid_indices = [i for i, val in enumerate(fermi_contributions) if val > 0]
+            if valid_indices and len(valid_indices) > 1:  # 至少需要2个有效元素
+                elements = [elements[i] for i in valid_indices]
+                fermi_contributions = [fermi_contributions[i] for i in valid_indices]
+                colors_pie = plt.cm.Set3(np.linspace(0, 1, len(elements)))
+                
+                # 绘制饼图
+                wedges, texts, autotexts = ax.pie(
+                    fermi_contributions, 
+                    labels=elements, 
+                    colors=colors_pie,
+                    autopct='%1.1f%%',
+                    startangle=90,
+                    textprops={'fontsize': 9}
+                )
+                
+                # 美化饼图
+                for autotext in autotexts:
+                    autotext.set_color('black')
+                    autotext.set_fontsize(8)
+                    autotext.set_fontweight('bold')
+                
+                ax.set_title('(E) Element Contribution at Fermi Level')
+            else:
+                ax.text(0.5, 0.5, "Insufficient element\ncontributions data", 
+                       ha='center', va='center', transform=ax.transAxes, fontsize=10)
+        else:
+            ax.text(0.5, 0.5, "No element contribution data", 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=10)
+        
+        # (F) DOS峰位分析图
+        ax = axes[1, 2]
+        # 绘制总DOS
+        ax.plot(energies, tdos_array, color='black', lw=1.2, alpha=0.7, label='Total DOS')
+        
+        # 标记主要峰位
+        if 'major_peaks' in dos_analysis and dos_analysis['major_peaks']:
+            peaks = dos_analysis['major_peaks']
+            peak_energies = [p['energy'] for p in peaks]
+            peak_heights = [p['dos_height'] for p in peaks]
+            
+            # 用不同颜色标记峰位
+            peak_colors = plt.cm.viridis(np.linspace(0, 1, len(peaks)))
+            for i, (energy, height, color) in enumerate(zip(peak_energies, peak_heights, peak_colors)):
+                ax.scatter(energy, height, color=color, s=80, zorder=5, 
+                          edgecolors='black', linewidth=1)
+                # 添加峰位标签
+                label_text = f"P{i+1}: {energy:.2f} eV"
+                ax.annotate(label_text, 
+                           xy=(energy, height),
+                           xytext=(energy, height * 1.1),
+                           ha='center',
+                           fontsize=8,
+                           bbox=dict(boxstyle="round,pad=0.2", facecolor=color, alpha=0.7))
+            
+            # 添加峰位信息表格
+            peak_table_data = []
+            for i, peak in enumerate(peaks[:3]):  # 只显示前3个峰
+                peak_table_data.append([
+                    f"P{i+1}",
+                    f"{peak['energy']:.2f} eV",
+                    f"{peak['dos_height']:.2f}"
+                ])
+            
+            # 在图上添加表格
+            if peak_table_data:
+                table = ax.table(cellText=peak_table_data,
+                                colLabels=['Peak', 'Energy', 'DOS'],
+                                cellLoc='center',
+                                loc='upper right',
+                                bbox=[0.65, 0.6, 0.3, 0.3])
+                table.auto_set_font_size(False)
+                table.set_fontsize(8)
+                table.scale(1, 1.5)
+        else:
+            # 如果没有峰位数据，显示普通DOS图
+            ax.plot(energies, tdos_array, color='black', lw=1.5)
+            ax.text(0.5, 0.5, "No peak analysis available", 
+                   ha='center', va='center', transform=ax.transAxes, fontsize=10)
+        
+        ax.axvline(x=0, color='#D55E00', linestyle='--', lw=1, label='$E_F$')
+        ax.set_title('(F) DOS Peak Analysis')
+        ax.set_xlabel('Energy - $E_F$ (eV)')
+        ax.set_ylabel('DOS (states/eV)')
+        ax.legend(frameon=False, fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(-10, 10)  # 限制能量范围以便更好观察峰位
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        # 4. 输出逻辑 (保留 get_plot_url)
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        
+        # 构建info信息，包含DOS分析结果
+        info_dict = {
+            "material": material_name,
+            "efermi": float(vr.complete_dos.efermi),
+            "formula": vr.final_structure.composition.reduced_formula,
+            "dos_analysis": dos_analysis
+        }
+        
+        # 添加带隙信息的简要总结
+        if 'band_gap' in dos_analysis:
+            info_dict["band_gap_summary"] = {
+                "value": dos_analysis['band_gap'],
+                "type": dos_analysis.get('gap_type', 'unknown'),
+                "vbm": dos_analysis.get('valence_band_max', None),
+                "cbm": dos_analysis.get('conduction_band_min', None)
+            }
+        
+        # 添加峰位分析总结
+        if 'major_peaks' in dos_analysis:
+            info_dict["peak_summary"] = {
+                "num_peaks": len(dos_analysis['major_peaks']),
+                "main_peaks": dos_analysis['major_peaks'][:3] if len(dos_analysis['major_peaks']) >= 3 else dos_analysis['major_peaks']
+            }
+        
+        # 添加元素贡献总结
+        if 'element_contributions' in dos_analysis:
+            info_dict["element_contribution_summary"] = dos_analysis['element_contributions']
+
+        return {
+            "info": info_dict,
+            "Image": get_plot_url(buf) # 这里调用你定义的外部钩子函数
+        }
+
+    except AssertionError as ae:
+        print(f"数据检查未通过: {ae}")
+        return {"error": str(ae)}
+    except Exception as e:
+        print(f"运行出错: {e}")
+        import traceback
+        traceback.print_exc()  # 打印详细错误信息
+        # 这里建议也调用一下错误图片的 get_plot_url
+        return {"error": str(e)}
+
+
+# 模拟环境中的外部函数 (根据你的实际代码保留)
+# def get_plot_url(buf): ...
 
 @mcp.tool()
 async def execute_command(command: str) -> dict:
