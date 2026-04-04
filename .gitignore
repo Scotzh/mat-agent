@@ -11,4 +11,5 @@ calculation_output/
 __pycache__/
 matagent_project/
 matagent-material-ai/
+matagent-web/
 instance/

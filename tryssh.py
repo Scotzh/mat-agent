@@ -79,7 +79,7 @@ class VaspTaskInitializer:
             return None
         return output
 
-    def opt(self, task_dir):
+    def relax(self, task_dir):
         command = f"cd '{task_dir}' && ./../auto_opt.sh"
         stdin, stdout, stderr = self.ssh.exec_command(command)
         output = stdout.read().decode()
@@ -91,7 +91,7 @@ class VaspTaskInitializer:
                 'stdout': str(output),
                 'stderr': str(error)}
 
-    def extract_opt_info(self, task_dir):
+    def extract_relax_info(self, task_dir):
         def _extract_outcar(outcar_path):
             """从OUTCAR提取信息"""
             outcar_info = {}
@@ -706,6 +706,255 @@ class VaspTaskInitializer:
                 "message": "远程执行 Python 命令失败",
                 "error": str(e)
             }
+
+    # ==================== 新增方法：分步任务控制 ====================
+
+    def create_relax_mission(self, task_directory: str) -> dict:
+        """
+        仅创建结构优化输入文件（执行 auto_relax_step1.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_relax_step1.sh"
+        return self.execute_command(cmd)
+
+    def create_scf_mission(self, task_directory: str) -> dict:
+        """
+        仅创建自洽计算输入文件（执行 auto_scf_step1.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_scfc_step1.sh"
+        return self.execute_command(cmd)
+
+    def create_band_mission(self, task_directory: str) -> dict:
+        """
+        仅创建能带计算输入文件（执行 auto_band_step1.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_band_step1.sh"
+        return self.execute_command(cmd)
+
+    def create_dos_mission(self, task_directory: str) -> dict:
+        """
+        仅创建态密度计算输入文件（执行 auto_dos_step1.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_dos_step1.sh"
+        return self.execute_command(cmd)
+
+    def submit_relax_calculation(self, task_directory: str) -> dict:
+        """
+        仅提交结构优化计算任务（执行 auto_relax_step2.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典，包含作业ID（如果提交成功）
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_relax_step2.sh"
+        result = self.execute_command(cmd)
+        # 尝试从输出中提取作业ID
+        if result.get("status") == "ok":
+            stdout = result.get("stdout", "")
+            import re
+            match = re.search(r"作业ID:\s*(\d+)", stdout)
+            if match:
+                result["job_id"] = match.group(1)
+            elif "Submitted batch job" in stdout:
+                match = re.search(r"Submitted batch job (\d+)", stdout)
+                if match:
+                    result["job_id"] = match.group(1)
+        return result
+
+    def submit_scf_calculation(self, task_directory: str) -> dict:
+        """
+        仅提交自洽计算任务（执行 auto_scf_step2.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_scfc_step2.sh"
+        result = self.execute_command(cmd)
+        if result.get("status") == "ok":
+            stdout = result.get("stdout", "")
+            import re
+            if "Submitted batch job" in stdout:
+                match = re.search(r"Submitted batch job (\d+)", stdout)
+                if match:
+                    result["job_id"] = match.group(1)
+        return result
+
+    def submit_band_calculation(self, task_directory: str) -> dict:
+        """
+        仅提交能带计算任务（执行 auto_band_step2.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_band_step2.sh"
+        result = self.execute_command(cmd)
+        if result.get("status") == "ok":
+            stdout = result.get("stdout", "")
+            import re
+            if "Submitted batch job" in stdout:
+                match = re.search(r"Submitted batch job (\d+)", stdout)
+                if match:
+                    result["job_id"] = match.group(1)
+        return result
+
+    def submit_dos_calculation(self, task_directory: str) -> dict:
+        """
+        仅提交态密度计算任务（执行 auto_dos_step2.sh）
+        
+        Args:
+            task_directory: 任务目录路径
+            
+        Returns:
+            执行结果字典
+        """
+        cmd = f"cd '{task_directory}' && bash ../auto_dos_step2.sh"
+        result = self.execute_command(cmd)
+        if result.get("status") == "ok":
+            stdout = result.get("stdout", "")
+            import re
+            if "Submitted batch job" in stdout:
+                match = re.search(r"Submitted batch job (\d+)", stdout)
+                if match:
+                    result["job_id"] = match.group(1)
+        return result
+
+    def modify_incar_file(self, task_directory: str, mission: str, read_mode: bool = True, 
+                          new_params: dict = None) -> dict:
+        """
+        读写修改INCAR文件
+        
+        Args:
+            task_directory: 任务目录路径
+            mission: 计算类型 ('relax', 'scf', 'band', 'dos')
+            read_mode: True表示读取INCAR参数，False表示写入新参数
+            new_params: 写入模式时的新参数字典
+            
+        Returns:
+            读取模式：返回INCAR参数字典
+            写入模式：返回操作结果
+        """
+        # 确定子目录
+        subdir_map = {
+            "relax": "结构优化",
+            "scf": "自洽计算",
+            "band": "能带计算",
+            "dos": "态密度计算"
+        }
+        if mission not in subdir_map:
+            return {
+                "status": "error",
+                "message": f"未知的计算类型: {mission}，可选: {list(subdir_map.keys())}"
+            }
+        
+        subdir = subdir_map[mission]
+        remote_path = f"{task_directory}/{subdir}/INCAR"
+        
+        if read_mode:
+            # 读取INCAR文件
+            try:
+                # 下载文件到本地临时文件
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w+', suffix='.incar', delete=False) as tmp:
+                    tmp_path = tmp.name
+                self.sftp.get(remote_path, tmp_path)
+                
+                # 使用pymatgen解析INCAR
+                from pymatgen.io.vasp import Incar
+                incar = Incar.from_file(tmp_path)
+                params = incar.as_dict()
+                
+                # 清理临时文件
+                import os
+                os.unlink(tmp_path)
+                
+                return {
+                    "status": "ok",
+                    "mission": mission,
+                    "incar_params": params,
+                    "file_path": remote_path
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"读取INCAR文件失败: {str(e)}",
+                    "error": str(e)
+                }
+        else:
+            # 写入模式：更新INCAR参数
+            if new_params is None:
+                return {
+                    "status": "error",
+                    "message": "写入模式需要提供new_params参数"
+                }
+            
+            try:
+                # 下载当前INCAR
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w+', suffix='.incar', delete=False) as tmp:
+                    tmp_path = tmp.name
+                self.sftp.get(remote_path, tmp_path)
+                
+                # 解析并更新
+                from pymatgen.io.vasp import Incar
+                incar = Incar.from_file(tmp_path)
+                
+                # 更新参数
+                for key, value in new_params.items():
+                    incar[key] = value
+                
+                # 保存回临时文件
+                incar.write_file(tmp_path)
+                
+                # 上传更新后的文件
+                self.sftp.put(tmp_path, remote_path)
+                
+                # 清理临时文件
+                import os
+                os.unlink(tmp_path)
+                
+                return {
+                    "status": "ok",
+                    "message": f"INCAR文件已更新，修改了 {len(new_params)} 个参数",
+                    "updated_params": list(new_params.keys()),
+                    "file_path": remote_path
+                }
+            except Exception as e:
+                return {
+                    "status": "error",
+                    "message": f"更新INCAR文件失败: {str(e)}",
+                    "error": str(e)
+                }
 
 
 if __name__ == "__main__":

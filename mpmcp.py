@@ -19,8 +19,8 @@ from ase.visualize import view
 import multiprocessing
 import flask_builder
 import flask_plot
-import duckdb
-import pickle
+# import duckdb
+# import pickle
 import loadenv
 import databasemanage
 import tryssh
@@ -32,6 +32,10 @@ import tempfile
 import shutil
 import atexit
 import signal
+import requests
+import json
+from typing import Optional, Dict, Any, List
+import oqmd
 # ...existing code...
 
 # 全局子进程列表（初始化），存储元组 (Process, temp_dir)
@@ -114,8 +118,137 @@ async def get_material_project_page(material_id: str) -> str:
     url = f"https://next-gen.materialsproject.org/materials/{material_id}/"
     return {"material_id": material_id, "url": url, "message": f"获取材料 {material_id} 的Material Project页面链接成功"}
 
+# 快速查询工具 - 简化接口
 @mcp.tool()
-async def search_materials(
+async def search_materials_from_oqmd(
+    elements: Optional[List[str]] = None,
+    band_gap_min: Optional[float] = None,
+    band_gap_max: Optional[float] = None,
+    stability_max: float = 0.1,
+    limit: int = 20
+) -> Dict[str, Any]:
+    """
+    在OQMD数据库搜索材料
+    
+    Args:
+        elements: 元素列表，如 ["Fe", "O"] 表示含Fe和O
+        band_gap_min: 最小带隙（eV）
+        band_gap_max: 最大带隙（eV）
+        stability_max: 最大凸包距离，默认0.1（越小越稳定）
+        limit: 返回记录数，默认20
+        
+    Returns:
+        查询结果
+    """
+    # 构建筛选条件
+    filter_parts = []
+    
+    if elements:
+        if len(elements) == 1:
+            filter_parts.append(f"element={elements[0]}")
+        else:
+            element_set = ",".join(elements)
+            filter_parts.append(f"element_set={element_set}")
+    
+    if band_gap_min is not None:
+        filter_parts.append(f"band_gap>={band_gap_min}")
+    
+    if band_gap_max is not None:
+        filter_parts.append(f"band_gap<={band_gap_max}")
+    
+    if stability_max is not None:
+        filter_parts.append(f"stability<={stability_max}")
+    
+    filter_expr = " AND ".join(filter_parts) if filter_parts else None
+    
+    # 默认返回字段
+    fields = ["name", "entry_id", "band_gap", "delta_e", "stability", "spacegroup", "ntypes"]
+    
+    return oqmd.search_oqmd(
+        fields=fields,
+        filter_expr=filter_expr,
+        limit=limit,
+        offset=0,
+        sort_by="stability",  # 默认按稳定性排序
+        desc=False
+    )
+
+@mcp.tool()
+async def get_material_structure_from_oqmd(entry_id: int,
+                                    mode="conventional",
+                                    get_sites: bool = False,
+                                    get_plot: bool = False, 
+                                    download: bool = False)-> dict | list:
+    """
+    在OQMD数据库获取指定材料的结构
+    Args:
+        entry_id: OQMD材料条目的ID
+        mode: 下载模式，"conventional"或"primitive"
+        get_sites: 是否获取原子位点信息,默认False
+        get_plot: 是否生成晶体结构图,默认False,如果你只想获取位点信息,可以设置为False
+        download: 是否下载CIF文件,默认False
+    """
+    
+    res = oqmd.parse_poscar_with_pymatgen(entry_id,mode)
+    message = []
+    if res["success"]:
+        structure = res["structure"]
+        lattice = structure.lattice
+        space_group_info = structure.get_space_group_info()
+        formula = structure.formula
+        reduced_formula = structure.composition.reduced_formula
+        structure_info = {
+            'formula': formula,
+            'reduced_formula': reduced_formula,
+            'space_group_symbol': space_group_info[0] if space_group_info else "未知",
+            'space_group_number': space_group_info[1] if space_group_info else "未知",
+            'lattice_parameters': {
+                'a': round(lattice.a, 4),
+                'b': round(lattice.b, 4),
+                'c': round(lattice.c, 4),
+                'alpha': round(lattice.alpha, 2),
+                'beta': round(lattice.beta, 2),
+                'gamma': round(lattice.gamma, 2),
+                'volume': round(lattice.volume, 4)
+            },
+            'number_of_sites': len(structure),
+            'density': round(structure.density, 4),
+            'is_ordered': structure.is_ordered,
+        }
+        if get_sites:
+            structure_info['sites'] = [{
+                'element': site.species_string,
+                'fractional_coordinates': [round(coord, 4) for coord in site.frac_coords],
+            } for site in structure.sites]
+            message.append(f"材料 {entry_id} 的原子位点信息已包含在返回结果中")
+        # 保存CIF文件
+        if download:
+            CifWriter(structure).write_file(f"cifs/{reduced_formula}-oqmd-{entry_id}.cif")
+            print(f"获取材料 {entry_id} 的晶体结构成功，已保存为cif文件")
+            message.append(f"材料 {entry_id} 的晶体结构已保存为cif文件，路径为'cifs/{reduced_formula}-oqmd-{entry_id}.cif'")   
+        # 生成晶体结构图
+        if get_plot:
+            structure_url = visualize_structure(structure)
+            message.append("生成了2d结构预览图和3d可视化交互式网页，请点击查看晶体结构图")
+            message.append(f"3d_image_url: {structure_url}")
+            res = get_structure_plot(structure)
+            if not res["error"]:
+                image = res["Image"]
+                return {"image_url": image, "structure_dict":structure_info, "message": message,
+            }
+            else:
+                message.append(res["error"])
+                return {"structure_dict":structure_info, "message": message}
+
+        return {"structure_dict":structure_info, "message": message,
+                }
+    else:
+        return {"error": res["error"], "message": "构建晶体结构失败"}
+    
+
+
+@mcp.tool()
+async def search_materials_from_mp(
     elements: list[str] | None = None,
     exclude_elements: list[str] | None = None,
     chemsys: str | list[str] | None = None,
@@ -186,7 +319,7 @@ async def search_materials(
 @mcp.tool()
 async def get_band_gap(material_id: str) -> dict:
     """
-    获取指定材料的带隙值
+    获取指定材料的带隙值(Material Project)
     
     Args:
         material_id: 材料ID (如"mp-1234")
@@ -215,12 +348,12 @@ async def get_band_gap(material_id: str) -> dict:
 
 
 @mcp.tool()
-async def get_material_structure(material_id: str, 
+async def get_material_structure_from_mp(material_id: str, 
                                 get_sites: bool = False,
                                 get_plot: bool = False, 
                                 download: bool = False)-> dict | list:
     """
-    获取指定材料的晶体结构数据,并保存为CIF文件,生成晶体结构图
+    在Material Project上获取指定材料的晶体结构数据,并保存为CIF文件,生成晶体结构图
     
     Args:
         material_id: 材料ID (如"mp-1234")
@@ -516,7 +649,7 @@ def get_plot_url(img_buffer):
 @mcp.tool()
 async def get_material_all_infomation_by_id(material_id: str) -> dict:
     """
-    获取指定材料的所有信息
+    获取Material Project指定材料的所有信息
     
     Args:
         material_id: 材料ID (如"mp-1234")
@@ -542,60 +675,6 @@ async def get_material_all_infomation_by_id(material_id: str) -> dict:
         return material_dict
     except Exception as e:
         return {"error": str(e), "message": f"获取材料 {material_id} 的所有信息失败"}
-
-# @mcp.tool()
-# async def get_dos_by_material_id(material_id: str) -> dict:
-#     """
-#     获取指定材料的态密度数据
-    
-#     Args:
-#         material_id: 材料ID (如"mp-1234")
-    
-#     Returns:
-#         材料的态密度数据
-#     """
-#     API_KEY = MY_API_KEY
-#     if not API_KEY:
-#         raise ValueError("MP_API_KEY环境变量未设置")
-#     os.makedirs("dos_plots", exist_ok=True)
-#     try:
-#         with MPRester(API_KEY) as mpr:
-#             dos = mpr.get_dos_by_material_id(material_id)
-#             dos_dict = dos.as_dict()
-#         # 创建DOS绘图器
-#         plotter = pymatgen.electronic_structure.plotter.DosPlotter()
-        
-#         # 添加总态密度
-#         plotter.add_dos("Total DOS", dos)
-        
-#         # 添加轨道分解态密度
-#         for orb, dos_obj in dos.get_spd_dos().items():
-#             plotter.add_dos(f"{orb.name} DOS", dos_obj)
-        
-#         # 绘制图像
-#         plt.figure(figsize=(10, 7))
-#         ax = plotter.get_plot()
-        
-#         # 设置图像标题和标签
-#         fermi_level = dos.efermi
-#         plt.axvline(fermi_level, color='r', linestyle='--', alpha=0.8)
-#         plt.title(f"{material_id} - Density of States", fontsize=16)
-#         plt.xlabel("Energy (eV)", fontsize=14)
-#         plt.ylabel("DOS (States/eV)", fontsize=14)
-#         plt.legend(fontsize=12, loc='best')
-#         plt.annotate(f'E$_F$ = {fermi_level:.3f} eV', 
-#                      xy=(fermi_level, 0), 
-#                      xytext=(fermi_level + 0.5, 0.5),
-#                      arrowprops=dict(facecolor='red', shrink=0.05),
-#                      fontsize=12)
-#         plt.savefig(f"dos_plots/{material_id}-dos.png", dpi=300)
-#         plt.close()  # 关闭图像以释放内存
-#         dos_dict["file_path"] = f"dos_plots/{material_id}-dos.png"
-#         print(f"获取材料 {material_id} 的态密度数据成功，已保存态密度图")
-#         return dos_dict
-#     except Exception as e:
-#         return {"error": str(e), "message": f"获取材料 {material_id} 的态密度数据失败"}
-
 
 
 
@@ -839,31 +918,32 @@ async def check_squeue() -> dict:
                 return {"error": "检查任务队列失败", "message": "请检查服务器连接是否正常"}
     except Exception as e:
         return {"error": str(e), "message": "检查任务队列失败"}
-
-@mcp.tool()
-async def submit_opt_mission(task_directory: str) -> dict:
-    """
-    提交结构优化任务到远程服务器
     
-    Args:
-        task_directory: 任务目录路径
-    
-    Returns:
-        任务提交结果
-    """
-    try:
-        with connection as vasp_task:
-            result = None
-            for _ in range(3):
-                result = vasp_task.opt(task_directory)
-                if result:
-                    break
-            return result
-    except Exception as e:
-        return {"error": str(e), "message": "任务提交失败"}
 
-@mcp.tool()
-async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize: bool = False) -> dict:
+
+# @mcp.tool()
+# async def submit_relax_mission(task_directory: str) -> dict:
+#     """
+#     提交结构优化任务到远程服务器
+    
+#     Args:
+#         task_directory: 任务目录路径
+    
+#     Returns:
+#         任务提交结果
+#     """
+#     try:
+#         with connection as vasp_task:
+#             result = None
+#             for _ in range(3):
+#                 result = vasp_task.opt(task_directory)
+#                 if result:
+#                     break
+#             return result
+#     except Exception as e:
+#         return {"error": str(e), "message": "任务提交失败"}
+
+def extract_relax_info(task_directory: str, get_plot: bool = True, visualize: bool = False) -> dict:
     """
     提取结构优化任务的结果信息，直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“结构优化”文件夹提取结果，若无结果，则请先进行计算
     Args:
@@ -877,7 +957,7 @@ async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize
         with connection as vasp_task:
             result = None
             for _ in range(3):
-                result = vasp_task.extract_opt_info(task_directory)
+                result = vasp_task.extract_relax_info(task_directory)
                 if result:
                     break
             if visualize:
@@ -894,41 +974,40 @@ async def extract_opt_info(task_directory: str, get_plot: bool = True, visualize
         return {"error": str(e), "message": "提取任务结果失败"}
 
 
-@mcp.tool()
-async def submit_scf_mission(task_directory: str, custom_incar: dict = None) -> dict:
-    """
-    提交自洽计算任务到远程服务器
+# @mcp.tool()
+# async def submit_scf_mission(task_directory: str, custom_incar: dict = None) -> dict:
+#     """
+#     提交自洽计算任务到远程服务器
     
-    Args:
-        task_directory: 任务目录路径
-        custom_incar: 自定义INCAR参数字典，会覆盖默认参数，默认None,默认的自洽计算INCAR参数如下
-        default_incar_dict = {
-            "SYSTEM": "SCF Calculation",
-            "ENCUT": encut,        # 平面波截断能量
-            "ISMEAR": 0,           # 高斯展宽
-            "SIGMA": 0.05,         # 展宽宽度
-            "EDIFF": 1E-6,         # 电子步收敛精度
-            "LWAVE": True,         # 输出WAVECAR
-            "LCHARG": True,        # 输出CHGCAR
-            "NSW": 0,              # 离子步数为0（自洽计算）
-            "IBRION": -1,          # 不进行离子弛豫
-            "ISIF": 2,             # 固定晶胞
-            "PREC": "Accurate",    # 精度设置
-            "ALGO": "Normal",      # 电子优化算法
-            "NELM": 100,           # 最大电子步数
-        }
-    Returns:
-        任务提交结果
-    """
-    try:
-        with connection as vasp_task:
-            result = vasp_task.scf(task_directory, custom_incar=None)
-            return result
-    except Exception as e:
-        return {"error": str(e), "message": "任务提交失败"}
+#     Args:
+#         task_directory: 任务目录路径
+#         custom_incar: 自定义INCAR参数字典，会覆盖默认参数，默认None,默认的自洽计算INCAR参数如下
+#         default_incar_dict = {
+#             "SYSTEM": "SCF Calculation",
+#             "ENCUT": encut,        # 平面波截断能量
+#             "ISMEAR": 0,           # 高斯展宽
+#             "SIGMA": 0.05,         # 展宽宽度
+#             "EDIFF": 1E-6,         # 电子步收敛精度
+#             "LWAVE": True,         # 输出WAVECAR
+#             "LCHARG": True,        # 输出CHGCAR
+#             "NSW": 0,              # 离子步数为0（自洽计算）
+#             "IBRION": -1,          # 不进行离子弛豫
+#             "ISIF": 2,             # 固定晶胞
+#             "PREC": "Accurate",    # 精度设置
+#             "ALGO": "Normal",      # 电子优化算法
+#             "NELM": 100,           # 最大电子步数
+#         }
+#     Returns:
+#         任务提交结果
+#     """
+#     try:
+#         with connection as vasp_task:
+#             result = vasp_task.scf(task_directory, custom_incar=None)
+#             return result
+#     except Exception as e:
+#         return {"error": str(e), "message": "任务提交失败"}
         
-@mcp.tool()
-async def extract_scf_info(task_directory: str) -> dict:
+def extract_scf_info(task_directory: str) -> dict:
     """
     提取自洽计算任务的结果信息，直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“自洽计算”文件夹提取结果，若无结果，则请先进行计算
     Args:
@@ -944,26 +1023,26 @@ async def extract_scf_info(task_directory: str) -> dict:
         return {"error": str(e), "message": "提取任务结果失败"}
 
 
-@mcp.tool()
-async def submit_band_mission(task_directory: str) -> dict:
-    """
-    提交能带计算任务到远程服务器
+# @mcp.tool()
+# async def submit_band_mission(task_directory: str) -> dict:
+#     """
+#     提交能带计算任务到远程服务器
     
-    Args:
-        task_directory: 任务目录路径
-    Returns:
-        任务提交结果
-    """
-    try:
-        with connection as vasp_task:
-            result = None
-            for _ in range(3):
-                result = vasp_task.band_calc(task_directory)
-                if result:
-                    break
-            return result
-    except Exception as e:
-        return {"error": str(e), "message": "任务提交失败"}
+#     Args:
+#         task_directory: 任务目录路径
+#     Returns:
+#         任务提交结果
+#     """
+#     try:
+#         with connection as vasp_task:
+#             result = None
+#             for _ in range(3):
+#                 result = vasp_task.band_calc(task_directory)
+#                 if result:
+#                     break
+#             return result
+#     except Exception as e:
+#         return {"error": str(e), "message": "任务提交失败"}
 
 
 def plot_vasp_band(xml_path, kpoints_path):
@@ -1033,8 +1112,7 @@ def plot_vasp_band(xml_path, kpoints_path):
         return {"Image": None, "error": str(e)}
 
 
-@mcp.tool()
-async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict:
+def extract_band_info(task_directory: str, plot_band: bool = True) -> dict:
     """
     提取能带计算任务的结果信息
     Args:
@@ -1059,29 +1137,28 @@ async def extract_band_info(task_directory: str, plot_band: bool = True) -> dict
     except Exception as e:
         return {"error": str(e), "message": "提取任务结果失败"}
     
-@mcp.tool()
-async def submit_dos_mission(task_directory: str) -> dict:
-    """
-    提交态密度计算任务到远程服务器
+# @mcp.tool()
+# async def submit_dos_mission(task_directory: str) -> dict:
+#     """
+#     提交态密度计算任务到远程服务器
     
-    Args:
-        task_directory: 任务目录路径
-    Returns:
-        任务提交结果
-    """
-    try:
-        with connection as vasp_task:
-            result = None
-            for _ in range(3):
-                result = vasp_task.dos_calc(task_directory)
-                if result:
-                    break
-            return result
-    except Exception as e:
-        return {"error": str(e), "message": "任务提交失败"}
+#     Args:
+#         task_directory: 任务目录路径
+#     Returns:
+#         任务提交结果
+#     """
+#     try:
+#         with connection as vasp_task:
+#             result = None
+#             for _ in range(3):
+#                 result = vasp_task.dos_calc(task_directory)
+#                 if result:
+#                     break
+#             return result
+#     except Exception as e:
+#         return {"error": str(e), "message": "任务提交失败"}
     
-@mcp.tool()
-async def extract_dos_info(task_directory: str,
+def extract_dos_info(task_directory: str,
                            plot_dos: bool = True) -> dict:
     """
     提取态密度计算任务的结果信息，并按 `plot_vasp_dos` 生成图像。直接用父目录，如/data/zhsun/mission/GaAs_20260319/，会自动在该目录的“态密度计算”文件夹提取结果，若无结果，则请先进行计算
@@ -1707,6 +1784,257 @@ async def read_file(file_path: str) -> dict:
 
 
 
+
+
+
+@mcp.tool()
+async def create_mission(task_directory: str, mission: str) -> dict:
+    """
+    创建计算任务的输入文件（POSCAR、INCAR、POTCAR、KPOINTS），但不提交计算
+    
+    Args:
+        task_directory: 任务目录路径
+        mission: 计算类型，可选: 'relax', 'scf', 'band', 'dos'
+        
+    Returns:
+        执行结果字典，包含成功状态和详细信息
+        
+    Note:
+        - relax: 需要任务目录中有CIF文件，生成结构优化输入文件
+        - scf: 需要先完成结构优化（有CONTCAR），生成自洽计算输入文件
+        - band: 需要先完成自洽计算（有CHGCAR），生成能带计算输入文件
+        - dos: 需要先完成自洽计算（有CHGCAR），生成态密度计算输入文件
+    """
+    mission = mission.lower().strip()
+    method_map = {
+        "relax": "create_relax_mission",
+        "scf": "create_scf_mission",
+        "band": "create_band_mission",
+        "dos": "create_dos_mission"
+    }
+    
+    if mission not in method_map:
+        return {
+            "success": False,
+            "error": f"未知的计算类型: {mission}，可选: {list(method_map.keys())}"
+        }
+    
+    try:
+        with connection as vasp_task:
+            method_name = method_map[mission]
+            method = getattr(vasp_task, method_name)
+            result = method(task_directory)
+            
+            # 统一结果格式
+            success = result.get("status") == "ok" or "error" not in result
+            response = {
+                "success": success,
+                "mission": mission,
+                "task_directory": task_directory,
+                "raw_result": result
+            }
+            
+            if not success:
+                response["error"] = result.get("error") or result.get("message") or "创建任务失败"
+            
+            return response
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "mission": mission,
+            "task_directory": task_directory
+        }
+
+
+@mcp.tool()
+async def submit_mission(task_directory: str, mission: str) -> dict:
+    """
+    提交已准备好的计算任务
+    
+    Args:
+        task_directory: 任务目录路径
+        mission: 计算类型，可选: 'relax', 'scf', 'band', 'dos'
+        
+    Returns:
+        执行结果字典，包含作业ID（如果提交成功）和详细信息
+    """
+    mission = mission.lower().strip()
+    method_map = {
+        "relax": "submit_relax_calculation",
+        "scf": "submit_scf_calculation",
+        "band": "submit_band_calculation",
+        "dos": "submit_dos_calculation"
+    }
+    
+    if mission not in method_map:
+        return {
+            "success": False,
+            "error": f"未知的计算类型: {mission}，可选: {list(method_map.keys())}"
+        }
+    
+    try:
+        with connection as vasp_task:
+            method_name = method_map[mission]
+            method = getattr(vasp_task, method_name)
+            result = method(task_directory)
+            
+            # 统一结果格式
+            success = result.get("status") == "ok" or "error" not in result
+            response = {
+                "success": success,
+                "mission": mission,
+                "task_directory": task_directory,
+                "job_id": result.get("job_id"),
+                "raw_result": result
+            }
+            
+            if success:
+                response["message"] = f"{mission}计算任务提交成功"
+                if result.get("job_id"):
+                    response["message"] += f"，作业ID: {result['job_id']}"
+                    response["message"] += f"使用工具 extract_result {task_directory} {mission} 来提取计算结果"
+            else:
+                response["error"] = result.get("error") or result.get("message") or "提交任务失败"
+            
+            return response
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "mission": mission,
+            "task_directory": task_directory
+        }
+
+
+@mcp.tool()
+async def modify_incar(task_directory: str, mission: str, read: bool, write: str = None) -> dict:
+    """
+    读写修改计算任务的INCAR文件
+    
+    Args:
+        task_directory: 任务目录路径
+        mission: 计算类型，可选: 'relax', 'scf', 'band', 'dos'
+        read: 如果为True，读取INCAR参数并返回；如果为False，则写入新参数
+        write: 当read为False时，提供JSON格式的参数字符串，例如 '{"ENCUT": 400, "ISMEAR": 0}'
+        
+    Returns:
+        读取模式：返回INCAR参数字典
+        写入模式：返回操作结果
+    """
+    mission = mission.lower().strip()
+    
+    # 解析write参数（如果提供）
+    new_params = None
+    if not read and write:
+        try:
+            import json
+            new_params = json.loads(write)
+            if not isinstance(new_params, dict):
+                return {
+                    "success": False,
+                    "error": "write参数必须是JSON对象（字典）"
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"解析write参数失败: {str(e)}",
+                "write_param": write
+            }
+    
+    try:
+        with connection as vasp_task:
+            result = vasp_task.modify_incar_file(
+                task_directory=task_directory,
+                mission=mission,
+                read_mode=read,
+                new_params=new_params
+            )
+            
+            # 统一结果格式
+            success = result.get("status") == "ok"
+            response = {
+                "success": success,
+                "mission": mission,
+                "task_directory": task_directory,
+                "read_mode": read,
+                "raw_result": result
+            }
+            
+            if success:
+                if read:
+                    response["incar_params"] = result.get("incar_params", {})
+                    response["message"] = f"成功读取{mission}任务的INCAR参数"
+                else:
+                    response["message"] = result.get("message", "INCAR文件更新成功")
+                    response["updated_params"] = result.get("updated_params", [])
+            else:
+                response["error"] = result.get("error") or result.get("message") or "操作失败"
+            
+            return response
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "mission": mission,
+            "task_directory": task_directory,
+            "read_mode": read
+        }
+
+@mcp.tool()
+def extract_result(task_directory: str, mission: str, plot: bool = True)->dict:
+    """
+    提取计算任务的结果
+    
+    Args:
+        task_directory: 任务目录路径
+        mission: 计算类型，可选: 'relax', 'scf', 'band', 'dos'
+        plot: 是否绘图，如有
+    Returns:
+        返回的结果
+    """
+
+    mission = mission.lower().strip()
+    method_map = {
+        "relax": lambda: extract_relax_info(task_directory, get_plot=plot, visualize=plot),
+        "scf": lambda: extract_scf_info(task_directory),
+        "band": lambda: extract_band_info(task_directory, plot_band=plot),
+        "dos": lambda: extract_dos_info(task_directory, plot_dos=plot),
+    }
+
+    if mission not in method_map:
+        return {
+            "success": False,
+            "error": f"未知的计算类型: {mission}，可选: ['relax', 'scf', 'band', 'dos']",
+            "task_directory": task_directory,
+            "mission": mission
+        }
+
+    try:
+        result = method_map[mission]()
+        if isinstance(result, dict) and result.get("error"):
+            return {
+                "success": False,
+                "mission": mission,
+                "task_directory": task_directory,
+                "result": result
+            }
+        return {
+            "success": True,
+            "mission": mission,
+            "task_directory": task_directory,
+            "result": result
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "mission": mission,
+            "task_directory": task_directory
+        }
 
 
 
