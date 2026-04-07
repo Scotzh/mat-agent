@@ -178,7 +178,7 @@ def download_cif(struct_id):
 
 class CrystalManager:
     _server_started = False
-    _port = 6750
+    _port = 6761
 
     def __init__(self):
         """初始化时仅负责启动后台服务"""

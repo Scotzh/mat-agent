@@ -2041,6 +2041,7 @@ def extract_result(task_directory: str, mission: str, plot: bool = True)->dict:
 if __name__ == "__main__":
     try:
         # 启动MCP服务器
+        # print(HOST, USERNAME, PASSWORD, PORT)
         connection = tryssh.VaspTaskInitializer(HOST, USERNAME, PASSWORD, PORT)
         for i in range(5):
             try:
@@ -2049,7 +2050,7 @@ if __name__ == "__main__":
                         print("已成功连接到远程服务器")
                         break
             except Exception as e:
-                print(f"连接远程服务器失败，正在重试... ({i+1}/5)")
+                print(f"连接远程服务器失败，正在重试... ({i+1}/5), 错误: {e}")
                 if i == 4:
                     raise e
         server = flask_plot.MemoryFileServer(port=6760)

@@ -6,6 +6,12 @@ resolution-markers = [
     "sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "backend",
+    "mcp-server",
+]
+
 [[package]]
 name = "ag2"
 version = "0.9.9"
@@ -116,6 +122,11 @@ sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9d/34/aa74b9d802773156
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/37/9f/9f2294c397aa505e03fce8e15656a1ee542037b294e9da21b01dc4aeb4ba/autogen-0.9.9-py3-none-any.whl", hash = "sha256:47cb422b23fb596031325e4859b0eff3eb7eb194fd0321661a1ba20314a197a3" },
 ]
+
+[[package]]
+name = "backend"
+version = "0.1.0"
+source = { virtual = "matagent-web/backend" }
 
 [[package]]
 name = "bcrypt"
